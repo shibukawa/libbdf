@@ -149,8 +149,8 @@ static inline void w_index_run(wr *w, uint32_t a, uint32_t b, uint32_t ordinal, 
 
 /* ob assembles an Object part: its tables and its op stream. */
 typedef struct ob {
-  wr strings, paths, fonts, objects, ops;
-  size_t nstrings, npaths, nfonts, nobjects;
+  wr strings, paths, paints, fonts, images, objects, ops;
+  size_t nstrings, npaths, npaints, nfonts, nimages, nobjects;
   float bbox[4];
 } ob;
 
@@ -190,7 +190,68 @@ static inline size_t ob_child(ob *o, uint32_t id) {
   return o->nobjects++;
 }
 
+/* ob_image adds an image whose part name is id as four bytes and zeros. */
+static inline size_t ob_image(ob *o, uint32_t id) {
+  uint8_t h[16] = {0};
+  h[0] = (uint8_t)(id >> 24);
+  h[1] = (uint8_t)(id >> 16);
+  h[2] = (uint8_t)(id >> 8);
+  h[3] = (uint8_t)id;
+  w_bytes(&o->images, h, sizeof h);
+  return o->nimages++;
+}
+
+/* ob_pattern adds a pattern paint of an image, scaled by s and moved. */
+static inline size_t ob_pattern(ob *o, size_t image, uint8_t repeat, float s, float dx, float dy) {
+  w_u8(&o->paints, BDF_PAINT_PATTERN);
+  w_varuint(&o->paints, image);
+  w_u8(&o->paints, repeat);
+  w_f32(&o->paints, s);
+  w_f32(&o->paints, 0);
+  w_f32(&o->paints, 0);
+  w_f32(&o->paints, s);
+  w_f32(&o->paints, dx);
+  w_f32(&o->paints, dy);
+  return o->npaints++;
+}
+
 static inline void ob_op(ob *o, uint8_t op) { w_u8(&o->ops, op); }
+
+static inline void ob_fill_paint(ob *o, size_t paint) {
+  ob_op(o, BDF_OP_FILL_PAINT);
+  w_varuint(&o->ops, paint);
+}
+
+static inline void ob_smoothing(ob *o, int on) {
+  ob_op(o, BDF_OP_SMOOTHING);
+  w_u8(&o->ops, on ? 1 : 0);
+  w_u8(&o->ops, 0);
+}
+
+/* ob_draw_image draws an image into a rectangle. */
+static inline void ob_draw_image(ob *o, size_t image, float x, float y, float w, float h) {
+  ob_op(o, BDF_OP_IMAGE);
+  w_varuint(&o->ops, image);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, w);
+  w_f32(&o->ops, h);
+}
+
+/* ob_draw_image_sub draws the part src (x, y, w, h in its pixels) of an
+ * image into a rectangle. */
+static inline void ob_draw_image_sub(ob *o, size_t image, const float src[4], float x, float y,
+                                     float w, float h) {
+  ob_op(o, BDF_OP_IMAGE_SUB);
+  w_varuint(&o->ops, image);
+  for (int i = 0; i < 4; i++) {
+    w_f32(&o->ops, src[i]);
+  }
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, w);
+  w_f32(&o->ops, h);
+}
 
 static inline void ob_set_font(ob *o, size_t font, float size) {
   ob_op(o, BDF_OP_FONT);
@@ -292,17 +353,21 @@ static inline wr ob_encode(ob *o) {
   w_bytes(&w, o->strings.b, o->strings.n);
   w_varuint(&w, o->npaths);
   w_bytes(&w, o->paths.b, o->paths.n);
-  w_varuint(&w, 0); /* paints */
+  w_varuint(&w, o->npaints);
+  w_bytes(&w, o->paints.b, o->paints.n);
   w_varuint(&w, o->nfonts);
   w_bytes(&w, o->fonts.b, o->fonts.n);
-  w_varuint(&w, 0); /* images */
+  w_varuint(&w, o->nimages);
+  w_bytes(&w, o->images.b, o->images.n);
   w_varuint(&w, o->nobjects);
   w_bytes(&w, o->objects.b, o->objects.n);
   w_varuint(&w, o->ops.n);
   w_bytes(&w, o->ops.b, o->ops.n);
   free(o->strings.b);
   free(o->paths.b);
+  free(o->paints.b);
   free(o->fonts.b);
+  free(o->images.b);
   free(o->objects.b);
   free(o->ops.b);
   memset(o, 0, sizeof *o);

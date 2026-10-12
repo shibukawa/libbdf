@@ -20,6 +20,7 @@ var Math = map[string]func(float64) float64{
 	"atan": func(x float64) float64 { return float64(C.bdfi_atan(C.double(x))) },
 	"asin": func(x float64) float64 { return float64(C.bdfi_asin(C.double(x))) },
 	"acos": func(x float64) float64 { return float64(C.bdfi_acos(C.double(x))) },
+	"log2": func(x float64) float64 { return float64(C.bdfi_log2(C.double(x))) },
 }
 
 // Math2 is the functions of two arguments.

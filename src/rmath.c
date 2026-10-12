@@ -28,6 +28,7 @@
 #define BDFI_PI4B 3.7748947079307982e-08 /* 0x3e64442d00000000 */
 #define BDFI_PI4C 2.6951514290790595e-15 /* 0x3ce8469898cc5170 */
 #define BDFI_4_PI 1.2732395447351628     /* 0x3ff45f306dc9c883: 4/Pi */
+#define BDFI_LOG2E 1.4426950408889634    /* 0x3ff71547652b82fe: 1/Ln2 */
 
 static const double bdfi_sin_c[6] = {
     1.58962301576546568060e-10, /* 0x3de5d8fd1fd19ccd */
@@ -440,6 +441,55 @@ double bdfi_mod(double x, double y) {
     return bdfi_nan();
   }
   return fmod(x, y);
+}
+
+/* math.Log (log.go; the FreeBSD e_log.c it is made from is Sun's, see the
+ * notices): the logarithm of a mantissa in [sqrt(2)/2, sqrt(2)) by a
+ * polynomial, and the exponent times ln 2 in two parts. */
+static double bdfi_log(double x) {
+  const double ln2_hi = 6.93147180369123816490e-01, ln2_lo = 1.90821492927058770002e-10;
+  const double l1 = 6.666666666666735130e-01, l2 = 3.999999999940941908e-01;
+  const double l3 = 2.857142874366239149e-01, l4 = 2.222219843214978396e-01;
+  const double l5 = 1.818357216161805012e-01, l6 = 1.531383769920937332e-01;
+  const double l7 = 1.479819860511658591e-01;
+  if (bdfi_isnan(x) || x == INFINITY) {
+    return x;
+  }
+  if (x < 0) {
+    return bdfi_nan();
+  }
+  if (x == 0) {
+    return -INFINITY;
+  }
+  int ki;
+  double f1 = frexp(x, &ki);
+  if (f1 < BDFI_SQRT2 / 2) {
+    f1 *= 2;
+    ki--;
+  }
+  double f = f1 - 1;
+  double k = (double)ki;
+  double s = f / (2 + f);
+  double s2 = s * s;
+  double s4 = s2 * s2;
+  double t1 = s2 * (l1 + s4 * (l3 + s4 * (l5 + s4 * l7)));
+  double t2 = s4 * (l2 + s4 * (l4 + s4 * l6));
+  double r = t1 + t2;
+  double hfsq = 0.5 * f * f;
+  return k * ln2_hi - ((hfsq - (s * (hfsq + r) + k * ln2_lo)) - f);
+}
+
+/* math.Log2 (log10.go): exact for the powers of two. */
+double bdfi_log2(double x) {
+  int exp = 0;
+  double frac = x;
+  if (!bdfi_isnan(x) && !bdfi_isinf(x) && x != 0) {
+    frac = frexp(x, &exp);
+  }
+  if (frac == 0.5) {
+    return (double)(exp - 1);
+  }
+  return bdfi_log(frac) * BDFI_LOG2E + (double)exp;
 }
 
 #ifndef BDF_IMPLEMENTATION

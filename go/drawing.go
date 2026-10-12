@@ -1,9 +1,11 @@
 package cbdf
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"sort"
 
 	"github.com/shibukawa/bdf"
 )
@@ -13,6 +15,17 @@ import (
 
 func pickOf[T any](r *rand.Rand, from []T) T { return from[r.IntN(len(from))] }
 
+// sortedHashes are the keys of a map in an order: a map has none, and the
+// same seed has to make the same drawing.
+func sortedHashes(m map[bdf.Hash]bdf.Rect) []bdf.Hash {
+	keys := make([]bdf.Hash, 0, len(m))
+	for h := range m {
+		keys = append(keys, h)
+	}
+	sort.Slice(keys, func(i, j int) bool { return bytes.Compare(keys[i][:], keys[j][:]) < 0 })
+	return keys
+}
+
 // drawing makes random drawings: every instruction of the vector core in
 // an order no writer would choose.
 type drawing struct {
@@ -21,6 +34,7 @@ type drawing struct {
 	paths  []bdf.PathRef
 	paints []bdf.PaintRef
 	uses   []bdf.ObjRef
+	images []bdf.ImageRef
 	depth  int
 	groups int
 	masks  int
@@ -83,9 +97,33 @@ func (d *drawing) paint() bdf.Paint {
 	return bdf.ConicGradient(float32(d.r.NormFloat64()*2), d.c(), d.c(), stops...)
 }
 
+// pattern is a pattern of an image: repeated or not, scaled, turned and
+// moved, and now and then with a matrix that maps the plane onto a line.
+func (d *drawing) pattern(img bdf.ImageRef) bdf.Paint {
+	r := d.r
+	p := bdf.Pattern(img, byte(r.IntN(4)))
+	switch r.IntN(6) {
+	case 0:
+		// as it is
+	case 1:
+		p.Matrix = [6]float32{0, 0, 0, 0, d.c(), d.c()}
+	case 2:
+		p.Matrix = [6]float32{2, 1, 4, 2, 0, 0}
+	default:
+		s := pickOf(r, []float32{0.1, 0.5, 1, 1.5, 4, -1})
+		a := r.NormFloat64()
+		if r.IntN(2) == 0 {
+			a = 0
+		}
+		sin, cos := float32(math.Sin(a)), float32(math.Cos(a))
+		p.Matrix = [6]float32{s * cos, s * sin, -s * sin, s * cos * pickOf(r, []float32{1, 1, 0.5, -1}), d.c(), d.c()}
+	}
+	return p
+}
+
 // newDrawing starts a drawing with paths and paints, and uses of the
-// objects given.
-func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect) *drawing {
+// objects and images given.
+func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash) *drawing {
 	d := &drawing{r: r, o: bdf.NewObject()}
 	for range 2 + r.IntN(4) {
 		d.paths = append(d.paths, d.o.AddPath(d.path()))
@@ -93,14 +131,73 @@ func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect) *drawing {
 	for range 1 + r.IntN(3) {
 		d.paints = append(d.paints, d.o.AddPaint(d.paint()))
 	}
-	for h, box := range children {
-		d.uses = append(d.uses, d.o.AddObject(h, box))
+	for _, h := range sortedHashes(children) {
+		d.uses = append(d.uses, d.o.AddObject(h, children[h]))
+	}
+	// the images come last: a drawing without them is the drawing it was
+	// before there were any
+	if len(images) > 0 {
+		for range 1 + r.IntN(3) {
+			d.images = append(d.images, d.o.AddImage(pickOf(r, images)))
+		}
+		for range 1 + r.IntN(2) {
+			d.paints = append(d.paints, d.o.AddPaint(d.pattern(pickOf(r, d.images))))
+		}
+		if r.IntN(8) == 0 {
+			d.paints = append(d.paints, d.o.AddPaint(d.pattern(bdf.ImageRef(len(d.images)+r.IntN(3))))) // an image there is not
+		}
 	}
 	return d
 }
 
+// imageStep draws an image, or changes how images are drawn.
+func (d *drawing) imageStep() {
+	r, o := d.r, d.o
+	img := pickOf(r, d.images)
+	if r.IntN(30) == 0 {
+		img = bdf.ImageRef(len(d.images) + r.IntN(2)) // one there is not
+	}
+	size := func() float32 {
+		switch r.IntN(12) {
+		case 0:
+			return 0
+		case 1:
+			return -d.small()
+		case 2:
+			return d.small() / 10 // much smaller than the image: one of its smaller copies
+		}
+		return d.small() * 2
+	}
+	switch r.IntN(6) {
+	case 0:
+		o.Smoothing(r.IntN(2) == 0, byte(r.IntN(3)))
+	case 1, 2, 3:
+		o.Image(img, d.c(), d.c(), size(), size())
+	default:
+		// a part of it: inside it, around it, backwards, or none
+		src := func() (float32, float32) {
+			switch r.IntN(8) {
+			case 0:
+				return float32(r.IntN(40)) - 10, 0
+			case 1:
+				return float32(r.IntN(40)), -float32(1 + r.IntN(20))
+			case 2:
+				return -5, 400
+			}
+			return float32(r.IntN(20)), float32(1+r.IntN(40)) / pickOf(r, []float32{1, 1, 2, 3})
+		}
+		sx, sw := src()
+		sy, sh := src()
+		o.ImageSub(img, sx, sy, sw, sh, d.c(), d.c(), size(), size())
+	}
+}
+
 func (d *drawing) step() {
 	r, o := d.r, d.o
+	if len(d.images) > 0 && r.IntN(5) == 0 {
+		d.imageStep()
+		return
+	}
 	switch r.IntN(44) {
 	case 0, 1:
 		o.FillColor(d.color())
@@ -225,7 +322,12 @@ func (d *drawing) finish() *bdf.Object {
 // RandomDrawing is an object of random instructions that uses the objects
 // given.
 func RandomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect) *bdf.Object {
-	d := newDrawing(r, children)
+	return randomDrawing(r, children, nil)
+}
+
+// randomDrawing is RandomDrawing with images to draw as well.
+func randomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash) *bdf.Object {
+	d := newDrawing(r, children, images)
 	for range 4 + r.IntN(40) {
 		d.step()
 	}
@@ -236,25 +338,40 @@ func RandomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect) *bdf.Object {
 // each other, pages of several layers, a scroll view of strips cut to their
 // bodies, and a sheet of tiles with gridlines.
 func RandomDocument(r *rand.Rand) *bdf.Document {
+	return randomDocument(r, bdf.NewDocument(), nil)
+}
+
+// RandomImageDocument is RandomDocument with images of the formats given
+// (see RandomImage) in its drawings: drawn whole and in parts, as patterns,
+// smoothed and not.
+func RandomImageDocument(r *rand.Rand, formats ...string) *bdf.Document {
 	doc := bdf.NewDocument()
+	var images []bdf.Hash
+	for range 1 + r.IntN(4) {
+		images = append(images, doc.AddImage(RandomImage(r, formats...)))
+	}
+	return randomDocument(r, doc, images)
+}
+
+func randomDocument(r *rand.Rand, doc *bdf.Document, images []bdf.Hash) *bdf.Document {
 	// objects that draw nothing else, then ones that draw those, then pages
 	leaves := map[bdf.Hash]bdf.Rect{}
 	for range 1 + r.IntN(3) {
-		h, box := doc.AddObject(RandomDrawing(r, nil))
+		h, box := doc.AddObject(randomDrawing(r, nil, images))
 		leaves[h] = box
 	}
 	middle := map[bdf.Hash]bdf.Rect{}
 	for range r.IntN(3) {
-		h, box := doc.AddObject(RandomDrawing(r, leaves))
+		h, box := doc.AddObject(randomDrawing(r, leaves, images))
 		middle[h] = box
 	}
-	for h, box := range leaves {
+	for _, h := range sortedHashes(leaves) {
 		if r.IntN(2) == 0 {
-			middle[h] = box
+			middle[h] = leaves[h]
 		}
 	}
 	layer := func() bdf.Layer {
-		h, _ := doc.AddObject(RandomDrawing(r, middle))
+		h, _ := doc.AddObject(randomDrawing(r, middle, images))
 		return bdf.Layer{Role: pickOf(r, []string{bdf.RoleBody, bdf.RoleBody, bdf.RoleBackground, bdf.RoleAnnotation, bdf.RoleHeader}), Obj: h}
 	}
 	pages := doc.NewView("pages", bdf.ViewFixed, "")
@@ -279,7 +396,7 @@ func RandomDocument(r *rand.Rand) *bdf.Document {
 	sheet.Rows = []bdf.Run{{float32(1 + r.IntN(30)), float32(8+r.IntN(20)) + 0.25}, {2, 0}, {float32(1 + r.IntN(5)), 33}}
 	sheet.Tiles = map[string]string{}
 	for range r.IntN(7) {
-		h, _ := doc.AddObject(RandomDrawing(r, middle))
+		h, _ := doc.AddObject(randomDrawing(r, middle, images))
 		sheet.Tiles[fmt.Sprintf("%d,%d", r.IntN(4), r.IntN(3))] = h.String()
 	}
 	if r.IntN(4) == 0 {

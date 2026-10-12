@@ -57,7 +57,7 @@ func argument(r *rand.Rand) float64 {
 // TestMathMatchesGo checks the functions of src/rmath.c against Go's.
 func TestMathMatchesGo(t *testing.T) {
 	r := rand.New(rand.NewPCG(1, 2))
-	one := map[string]func(float64) float64{"sin": math.Sin, "cos": math.Cos, "tan": math.Tan, "atan": math.Atan, "asin": math.Asin, "acos": math.Acos}
+	one := map[string]func(float64) float64{"sin": math.Sin, "cos": math.Cos, "tan": math.Tan, "atan": math.Atan, "asin": math.Asin, "acos": math.Acos, "log2": math.Log2}
 	two := map[string]func(float64, float64) float64{"atan2": math.Atan2, "hypot": math.Hypot, "max": math.Max, "min": math.Min, "mod": math.Mod}
 	const n = 400000
 	for name, f := range one {

@@ -21,6 +21,7 @@
 #endif
 
 #include "bdf_internal.h"
+#include "image_internal.h"
 
 /* ---- Go's math ----------------------------------------------------------- */
 
@@ -50,6 +51,10 @@ BDF_INTERNAL double bdfi_hypot(double p, double q);
 BDF_INTERNAL double bdfi_fmax(double x, double y);
 BDF_INTERNAL double bdfi_fmin(double x, double y);
 BDF_INTERNAL double bdfi_mod(double x, double y);
+BDF_INTERNAL double bdfi_log2(double x);
+/* A double as an int the way the reference's processor converts it: what is
+ * no number, or too large for 64 bits, is the smallest int. */
+BDF_INTERNAL int64_t bdfi_to_int(double v);
 #ifndef BDF_IMPLEMENTATION
 /* a*b + c as the sources of the rasterizer compute it, for the tests of the
  * build: two operations, whatever the processor offers */
@@ -370,6 +375,74 @@ typedef struct bdfi_gradient_shader {
 BDF_INTERNAL int bdfi_gradient_shader_init(bdfi_gradient_shader *g, const bdf_paint *p,
                                            const bdfi_mat *m, const bdfi_lut *lut);
 
+/* ---- Images -------------------------------------------------------------- */
+
+/* The formats imgconv.Sniff of the reference tells. */
+enum {
+  BDFI_IMAGE_NONE,
+  BDFI_IMAGE_PNG,
+  BDFI_IMAGE_JPEG,
+  BDFI_IMAGE_WEBP,
+  BDFI_IMAGE_AVIF,
+  BDFI_IMAGE_GIF,
+  BDFI_IMAGE_BMP,
+  BDFI_IMAGE_SVG
+};
+
+BDF_INTERNAL int bdfi_image_sniff(const uint8_t *b, size_t n);
+BDF_INTERNAL const char *bdfi_image_name(int format);
+BDF_INTERNAL int bdfi_image_is_svg(const uint8_t *b, size_t n);
+BDF_INTERNAL int bdfi_image_config(const uint8_t *b, size_t n, int32_t *w, int32_t *h);
+BDF_INTERNAL int bdfi_image_orientation(const uint8_t *data, size_t len);
+
+/*
+ * A decoded image with its smaller copies: levels[k] is the image scaled
+ * down 2^k times, premultiplied; levels[0] is the image and the others are
+ * made when a drawing asks for them.
+ */
+#define BDFI_MAX_LEVELS 32
+typedef struct bdfi_picture {
+  int32_t w, h;
+  bdfi_bitmap levels[BDFI_MAX_LEVELS];
+  int nlevels;
+  uint64_t used; /* the drawing that used it last */
+  size_t part;   /* the part it is the image of */
+} bdfi_picture;
+
+BDF_INTERNAL bdf_status bdfi_picture_decode(const uint8_t *data, size_t len, bdfi_picture **out,
+                                            int *format);
+BDF_INTERNAL void bdfi_picture_free(bdfi_picture *p);
+BDF_INTERNAL int bdfi_picture_level(bdfi_picture *p, const bdfi_mat *inv, int *oom);
+BDF_INTERNAL void bdfi_picture_sample(const bdfi_picture *p, int level, double x, double y,
+                                      int wrap_x, int wrap_y, float out[4]);
+BDF_INTERNAL void bdfi_picture_nearest(const bdfi_picture *p, double x, double y, float out[4]);
+
+/* An image repeated in the pattern space of a paint. */
+typedef struct bdfi_pattern_shader {
+  bdfi_shader base;
+  bdfi_mat inv; /* device to image pixels */
+  const bdfi_picture *img;
+  uint8_t repeat;
+  int level;
+} bdfi_pattern_shader;
+
+BDF_INTERNAL int bdfi_pattern_shader_init(bdfi_pattern_shader *s, const bdf_paint *paint,
+                                          bdfi_picture *img, const bdfi_mat *m, int *oom);
+
+/* An image, or a part of it, drawn into a rectangle whose outline is the
+ * coverage. */
+typedef struct bdfi_image_shader {
+  bdfi_shader base;
+  bdfi_mat inv; /* device to image pixels */
+  const bdfi_picture *img;
+  int level, smooth;
+  double sx0, sy0, sx1, sy1; /* the source rectangle sampled from, in image pixels */
+} bdfi_image_shader;
+
+BDF_INTERNAL void bdfi_image_shader_init(bdfi_image_shader *s, bdfi_picture *img,
+                                         const bdfi_mat *inv, int smooth, double sx0, double sy0,
+                                         double sx1, double sy1, int *oom);
+
 /* ---- The renderer -------------------------------------------------------- */
 
 /* What a renderer keeps of an object: the object, and what was made of its
@@ -386,7 +459,20 @@ typedef struct bdfi_robj {
   bdf_paths *coll; /* the part as a path collection, and its bytes */
   uint8_t *coll_data;
   uint8_t coll_state;
+  bdfi_picture *pic; /* the part as an image (the renderer's kept list owns it) */
+  uint8_t pic_state; /* 0: not asked for; 1: there; 2: none (not decodable) */
 } bdfi_robj;
+
+/*
+ * The pixels of the pictures a renderer keeps decoded (maxPicturePixels of
+ * the reference): 4 bytes a pixel, and a third more for the smaller copies.
+ * One image may have BDFI_MAX_DECODE_PIXELS; a document decides how many it
+ * draws. Past the bound the pictures the image being drawn has not used
+ * make room, the ones used longest ago first.
+ */
+#ifndef BDF_MAX_PICTURE_PIXELS
+#define BDF_MAX_PICTURE_PIXELS ((int64_t)256 << 20)
+#endif
 
 struct bdf_renderer {
   const bdf_doc *doc; /* NULL for bdf_render_object */
@@ -396,6 +482,10 @@ struct bdf_renderer {
   size_t nparts;
   bdfi_robj alone; /* the object of bdf_render_object */
   size_t luts;     /* how many gradients have their colours kept */
+  bdfi_picture **kept; /* the pictures kept decoded */
+  size_t nkept, cap_kept;
+  int64_t pixels, room; /* of the pictures kept, and the most of them */
+  uint64_t drawing;     /* counts the images drawn */
   char **warnings;
   size_t nwarnings, cap_warnings;
   bdfi_scratch sc;
@@ -410,6 +500,9 @@ BDF_INTERNAL bdfi_rpath *bdfi_r_path(struct bdf_renderer *r, bdfi_robj *o, size_
 /* The colours of gradient i of an object, or NULL. */
 BDF_INTERNAL const bdfi_lut *bdfi_r_lut(struct bdf_renderer *r, bdfi_robj *o, size_t i,
                                         const bdf_paint *p);
+/* The picture of an image part, or NULL: for one that is missing or cannot
+ * be decoded (warned of once), and for an SVG image. */
+BDF_INTERNAL bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]);
 BDF_INTERNAL bdfi_scratch *bdfi_r_scratch(struct bdf_renderer *r);
 BDF_INTERNAL bdfi_surface *bdfi_r_new_surface(struct bdf_renderer *r, int w, int h);
 BDF_INTERNAL void bdfi_r_release(struct bdf_renderer *r, bdfi_surface *s);
@@ -423,6 +516,9 @@ typedef struct bdfi_style {
   bdf_paint paint; /* points into owner */
   bdfi_robj *owner;
   size_t index;
+  /* the image of a pattern, or NULL when it could not be decoded. The
+   * renderer keeps it at least as long as the image being drawn. */
+  bdfi_picture *image;
 } bdfi_style;
 
 /* The drawing state of a context: what SAVE and RESTORE keep. */

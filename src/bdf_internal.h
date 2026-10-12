@@ -83,6 +83,35 @@ BDF_INTERNAL void *bdfi_malloc_array(size_t n, size_t size);
 BDF_INTERNAL void *bdfi_calloc_array(size_t n, size_t size);
 BDF_INTERNAL void *bdfi_realloc_array(void *p, size_t n, size_t size);
 
+/* ---- Input in stretches --------------------------------------------------- */
+
+/*
+ * bdfi_pull is input that comes a stretch at a time, as a reader behind a
+ * buffer gives it: p[pos..n) is what is at hand, and more replaces a
+ * stretch that is used up by the next one, of at most want bytes (it
+ * returns 0 at the end of the input, or when reading on fails). A reader
+ * asks for BDFI_PULL_BUFFER bytes, the size of the reference's buffer,
+ * unless it reads a longer run in one piece.
+ */
+#define BDFI_PULL_BUFFER 4096
+typedef struct bdfi_pull bdfi_pull;
+struct bdfi_pull {
+  const uint8_t *p;
+  size_t n, pos;
+  int (*more)(bdfi_pull *in, size_t want);
+  void *ctx;
+};
+
+/*
+ * bdfi_inflate_pull inflates a raw deflate stream that starts at in->p +
+ * in->pos and goes on through the stretches in gives. It takes no byte it
+ * does not need and asks for a stretch only when it needs one, so that in
+ * is left where the stream ends. The result is at most limit bytes, the
+ * caller's to free.
+ */
+BDF_INTERNAL bdf_status bdfi_inflate_pull(bdfi_pull *in, size_t limit, uint8_t **out,
+                                          size_t *out_len);
+
 /* bdfi_arena hands out memory that is freed all at once. */
 typedef struct bdfi_arena_chunk bdfi_arena_chunk;
 typedef struct bdfi_arena {

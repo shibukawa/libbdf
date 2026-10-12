@@ -91,6 +91,51 @@ static void test_reference_document(void) {
   bdf_doc_free(doc);
 }
 
+/* The documents that draw images, one for each format: the decoders give
+ * the reference's pixels, and its sampling makes the same of them. */
+static void test_reference_images(void) {
+  for (size_t d = 0; d < RV_IMAGE_DOCUMENTS; d++) {
+    bdf_doc *doc = NULL;
+    bdf_renderer *r = NULL;
+    bdf_error err;
+    CHECK(bdf_doc_open_memory(rv_image_documents + rv_image_document[d].off, rv_image_document[d].len, &doc,
+                              &err) == BDF_OK);
+    CHECK(bdf_renderer_new(doc, NULL, &r, &err) == BDF_OK);
+    for (size_t i = 0; i < RV_IMAGE_RENDERS; i++) {
+      if (rv_image_render[i].doc != d) {
+        continue;
+      }
+      bdf_image img;
+      bdf_status st;
+      if (rv_image_render[i].scale > 0) {
+        st = bdf_render_page(r, rv_image_render[i].view, rv_image_render[i].page, rv_image_render[i].scale,
+                             &img, &err);
+      } else {
+        st = bdf_render_region(r, rv_image_render[i].view, rv_image_render[i].page,
+                               rv_image_render[i].region, rv_image_render[i].w, rv_image_render[i].h, &img,
+                               &err);
+      }
+      if (st != BDF_OK) {
+        failures++;
+        fprintf(stderr, "%s images, render %zu: %s\n", rv_image_document[d].format, i, err.message);
+        continue;
+      }
+      if (img.width != rv_image_render[i].w || img.height != rv_image_render[i].h) {
+        failures++;
+        fprintf(stderr, "%s images, render %zu: %d×%d, want %d×%d\n", rv_image_document[d].format, i,
+                img.width, img.height, rv_image_render[i].w, rv_image_render[i].h);
+      } else if (fnv(img.pixels, 4 * (size_t)img.width * (size_t)img.height) != rv_image_render[i].hash) {
+        failures++;
+        fprintf(stderr, "%s images, render %zu: the pixels are not those the reference draws\n",
+                rv_image_document[d].format, i);
+      }
+      bdf_image_free(&img);
+    }
+    bdf_renderer_free(r);
+    bdf_doc_free(doc);
+  }
+}
+
 static void test_pixels(void) {
   bdf_error err;
   bdf_image img;
@@ -163,6 +208,181 @@ static void test_pixels(void) {
   CHECK(pixel(&img, 6, 6) == 0x80808080 && pixel(&img, 7, 7) == 0x80808080 && pixel(&img, 5, 6) == 0);
   bdf_image_free(&img);
   bdf_object_free(obj);
+}
+
+/* 2x2: red, green; blue, white at half alpha */
+static const uint8_t png_2x2[76] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02, 0x08, 0x06, 0x00, 0x00, 0x00, 0x72, 0xb6, 0x0d,
+    0x24, 0x00, 0x00, 0x00, 0x13, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x0c, 0x81, 0x34, 0x08, 0x34, 0x00, 0x00, 0x49, 0x49, 0x09, 0x78, 0x9c, 0x51, 0x17, 0x92,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+};
+/* 2x1: red, blue, with an EXIF orientation of 6 (turned a quarter clockwise) */
+static const uint8_t png_turned[109] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0xf4, 0x22, 0x7f,
+    0x8a, 0x00, 0x00, 0x00, 0x1a, 0x65, 0x58, 0x49, 0x66, 0x4d, 0x4d, 0x00, 0x2a, 0x00, 0x00, 0x00,
+    0x08, 0x00, 0x01, 0x01, 0x12, 0x00, 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0xd6, 0x67, 0x4b, 0x69, 0x00, 0x00, 0x00, 0x0e, 0x49, 0x44, 0x41, 0x54, 0x78,
+    0xda, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x42, 0xff, 0x01, 0x0f, 0xf9, 0x03, 0xfd, 0x98, 0x79, 0xd7,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+};
+/* a header that states 20000 x 20000 pixels */
+static const uint8_t png_huge[45] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x4e, 0x20, 0x00, 0x00, 0x4e, 0x20, 0x08, 0x06, 0x00, 0x00, 0x00, 0xe3, 0x70, 0x46,
+    0x39, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+};
+/* 2x1, gray: black, white */
+static const uint8_t png_gray[68] = {
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x08, 0x00, 0x00, 0x00, 0x00, 0xd1, 0x49, 0x20,
+    0x56, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0x60, 0xf8, 0x0f, 0x00,
+    0x01, 0x02, 0x01, 0x00, 0xd1, 0x1a, 0xcb, 0x8f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+    0xae, 0x42, 0x60, 0x82,
+};
+
+static int warned(const bdf_renderer *r, const char *what) {
+  for (size_t i = 0; i < bdf_renderer_warning_count(r); i++) {
+    if (strstr(bdf_renderer_warning(r, i), what)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static void add_image(docb *d, uint32_t id, const void *bytes, size_t n) {
+  wr w = {0};
+  w_bytes(&w, bytes, n);
+  docb_add(d, id, "img", &w);
+}
+
+/* Images: drawn pixel for pixel and smoothed, a part of one, as patterns,
+ * turned by their EXIF orientation, and what is said of those that are not
+ * drawn. */
+static void test_images(void) {
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  bdf_image img;
+  static const char avif[] = "\0\0\0\x1c" "ftypavif\0\0\0\0avifmif1miaf";
+  static const char svg[] = "<svg xmlns=\"http://www.w3.org/2000/svg\"/>";
+  add_image(&d, 1, png_2x2, sizeof png_2x2);
+  add_image(&d, 2, png_turned, sizeof png_turned);
+  add_image(&d, 3, png_huge, sizeof png_huge);
+  add_image(&d, 4, png_gray, sizeof png_gray);
+  add_image(&d, 5, avif, sizeof avif - 1);
+  add_image(&d, 6, svg, sizeof svg - 1);
+  add_image(&d, 7, png_2x2, sizeof png_2x2 - 20); /* cut short */
+  add_image(&d, 8, "what is this", 12);
+
+  /* 20: on black, the image pixel for pixel, its green pixel alone, the
+   * image as a pattern that repeats and as one that does not */
+  ob a = {0};
+  size_t im = ob_image(&a, 1);
+  size_t tiles = ob_pattern(&a, im, BDF_REPEAT, 1, 0, 0);
+  size_t once = ob_pattern(&a, im, BDF_NO_REPEAT, 1, 5, 5);
+  ob_fill_color(&a, 0x000000ff);
+  ob_rect(&a, BDF_OP_FILL_RECT, 0, 0, 8, 8);
+  ob_smoothing(&a, 0);
+  ob_draw_image(&a, im, 0, 0, 4, 4);
+  const float green[4] = {1, 0, 1, 1};
+  ob_draw_image_sub(&a, im, green, 4, 0, 2, 2);
+  ob_fill_paint(&a, tiles);
+  ob_rect(&a, BDF_OP_FILL_RECT, 0, 4, 4, 4);
+  ob_fill_paint(&a, once);
+  ob_rect(&a, BDF_OP_FILL_RECT, 4, 4, 4, 4);
+  docb_object(&d, 20, &a);
+
+  /* 21: two gray pixels stretched over eight, smoothed (as images are until
+   * an object says otherwise), and the turned image */
+  ob b = {0};
+  size_t gray = ob_image(&b, 4), turned = ob_image(&b, 2);
+  ob_draw_image(&b, gray, 0, 0, 8, 1);
+  ob_smoothing(&b, 0);
+  ob_draw_image(&b, turned, 0, 2, 1, 2);
+  docb_object(&d, 21, &b);
+
+  /* 22: what is not drawn */
+  ob c = {0};
+  for (uint32_t id = 3; id <= 9; id++) {
+    if (id != 4) {
+      ob_draw_image(&c, ob_image(&c, id), 0, 0, 2, 2); /* 9 is not there */
+    }
+  }
+  ob_draw_image(&c, 40, 0, 0, 2, 2);
+  ob_fill_paint(&c, ob_pattern(&c, 40, BDF_REPEAT, 1, 0, 0)); /* a pattern of no image: nothing */
+  ob_rect(&c, BDF_OP_FILL_RECT, 0, 0, 2, 2);
+  docb_object(&d, 22, &c);
+
+  char views[1024], n20[33], n21[33], n22[33];
+  part_name(20, n20);
+  part_name(21, n21);
+  part_name(22, n22);
+  snprintf(views, sizeof views,
+           "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":["
+           "{\"w\":8,\"h\":8,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":8,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":2,\"h\":2,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]}]",
+           n20, n21, n22);
+  bdf_doc *doc = docb_open(&d, views, &keep);
+  bdf_renderer *r = NULL;
+  CHECK(bdf_renderer_new(doc, NULL, &r, &err) == BDF_OK);
+
+  const uint32_t red = 0xff0000ff, lime = 0x00ff00ff, blue = 0x0000ffff, black = 0x000000ff;
+  const uint32_t half = 0x808080ff; /* white at half alpha, on black */
+  CHECK(bdf_render_page(r, 0, 0, 1, &img, &err) == BDF_OK);
+  CHECK(img.width == 8 && img.height == 8);
+  /* each pixel of the image is four of the page */
+  CHECK(pixel(&img, 0, 0) == red && pixel(&img, 1, 1) == red && pixel(&img, 2, 0) == lime && pixel(&img, 3, 1) == lime);
+  CHECK(pixel(&img, 0, 2) == blue && pixel(&img, 1, 3) == blue && pixel(&img, 2, 2) == half && pixel(&img, 3, 3) == half);
+  /* the part */
+  CHECK(pixel(&img, 4, 0) == lime && pixel(&img, 5, 1) == lime && pixel(&img, 6, 0) == black && pixel(&img, 4, 2) == black);
+  /* the pattern, from the origin of the page */
+  CHECK(pixel(&img, 0, 4) == red && pixel(&img, 1, 4) == lime && pixel(&img, 2, 4) == red && pixel(&img, 3, 4) == lime);
+  CHECK(pixel(&img, 0, 5) == blue && pixel(&img, 1, 5) == half && pixel(&img, 0, 6) == red && pixel(&img, 3, 7) == half);
+  /* and the one that is drawn once, where its matrix puts it */
+  CHECK(pixel(&img, 5, 5) == red && pixel(&img, 6, 5) == lime && pixel(&img, 5, 6) == blue && pixel(&img, 6, 6) == half);
+  CHECK(pixel(&img, 4, 4) == black && pixel(&img, 7, 5) == black && pixel(&img, 5, 7) == black && pixel(&img, 4, 5) == black);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+  /* twice the size: the image is decoded once and drawn again */
+  CHECK(bdf_render_page(r, 0, 0, 2, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 3, 3) == red && pixel(&img, 4, 3) == lime && pixel(&img, 3, 4) == blue && pixel(&img, 7, 7) == half);
+  bdf_image_free(&img);
+
+  CHECK(bdf_render_page(r, 0, 1, 1, &img, &err) == BDF_OK);
+  /* black to white between the centres of the two pixels, and held outside them */
+  static const uint8_t ramp[8] = {0, 0, 32, 96, 159, 223, 255, 255};
+  for (int x = 0; x < 8; x++) {
+    uint32_t v = ramp[x];
+    CHECK(pixel(&img, x, 0) == (v << 24 | v << 16 | v << 8 | 0xff));
+  }
+  /* a quarter turn clockwise: the red pixel on the left is on top */
+  CHECK(pixel(&img, 0, 2) == red && pixel(&img, 0, 3) == blue && pixel(&img, 1, 2) == 0xffffffff);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+
+  CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 0, 0) == 0xffffffff && pixel(&img, 1, 1) == 0xffffffff);
+  CHECK(warned(r, "an image of more than 104857600 pixels is not drawn"));
+  CHECK(warned(r, "AVIF images are not drawn"));
+  CHECK(warned(r, "SVG images are not drawn"));
+  CHECK(warned(r, "an image (png) cannot be decoded"));
+  CHECK(warned(r, "an image () cannot be decoded"));
+  CHECK(warned(r, "image 00000009000000000000000000000000 is missing"));
+  CHECK(warned(r, "bad image reference"));
+  CHECK(bdf_renderer_warning_count(r) == 7);
+  bdf_image_free(&img);
+  /* said once, however often they are drawn */
+  CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
+  CHECK(bdf_renderer_warning_count(r) == 7);
+  bdf_image_free(&img);
+
+  bdf_renderer_free(r);
+  bdf_doc_free(doc);
+  free(keep.b);
 }
 
 static void test_pages(void) {
@@ -294,7 +514,9 @@ static void test_pages(void) {
 int main(void) {
   test_pixels();
   test_pages();
+  test_images();
   test_reference_objects();
   test_reference_document();
+  test_reference_images();
   return finish();
 }

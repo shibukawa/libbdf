@@ -35,6 +35,7 @@ import (
 	"strings"
 
 	"github.com/shibukawa/bdf"
+	"github.com/shibukawa/bdf/image/imgconv"
 	"github.com/shibukawa/bdf/raster/imagebdf"
 	cbdf "github.com/shibukawa/libbdf/go"
 	"golang.org/x/text/unicode/norm"
@@ -409,8 +410,59 @@ func renderVectors(path string) {
 	}
 	fmt.Fprintf(&o.b, "#define RV_RENDERS %d\n", len(rows))
 	o.comment("what the reference draws of it: the view and the page, then either the scale of the whole page (and the\n * size that comes of it), or 0 and the region with the size it is drawn into; and the hash of the pixels")
-	o.b.WriteString("static const struct {\n  size_t view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_render[RV_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
-	o.write(path, "random drawings and a random document with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
+	o.b.WriteString("static const struct {\n  size_t view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_render[RV_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n\n")
+
+	// documents that draw images, one for each format the rasterizer decodes
+	formats := cbdf.ImageFormats()
+	all, rows = nil, nil
+	var docRows []string
+	for di, format := range formats {
+		for {
+			doc = cbdf.RandomImageDocument(r, format)
+			file.Reset()
+			if err := doc.WriteSingle(&file); err != nil {
+				log.Fatal(err)
+			}
+			decoded := 0
+			for _, p := range doc.Parts() {
+				if p.Type == bdf.PartImage {
+					if _, err := imgconv.Decode(p.Data); err == nil {
+						decoded++
+					}
+				}
+			}
+			if file.Len() < 10<<10 && decoded >= 2 && len(doc.Views[0].Pages) >= 2 {
+				break
+			}
+		}
+		read = must(must(bdf.OpenSingle(bytes.NewReader(file.Bytes()), int64(file.Len()))).ToDocument())
+		ref = imagebdf.New(read, nil)
+		docRows = append(docRows, fmt.Sprintf("    {%d, %d, %q},", len(all), file.Len(), format))
+		all = append(all, file.Bytes()...)
+		drawImages := func(view, page int, scale float64, region bdf.Rect, w, h int) {
+			var img *image.RGBA
+			if scale > 0 {
+				img = must(ref.Page(read.Views[view], page, scale))
+			} else {
+				img = must(ref.Region(read.Views[view], page, region, w, h))
+			}
+			rows = append(rows, fmt.Sprintf("    {%d, %d, %d, %v, {%v, %v, %v, %v}, %d, %d, 0x%016xull},", di, view, page, scale,
+				region.X, region.Y, region.W, region.H, img.Rect.Dx(), img.Rect.Dy(), fnv(img.Pix)))
+		}
+		for pi := range read.Views[0].Pages {
+			// small enough for the smaller copies of the larger images, and large
+			drawImages(0, pi, []float64{1, 0.3, 2}[pi%3], bdf.Rect{}, 0, 0)
+			drawImages(0, pi, 0, bdf.Rect{X: 13, Y: 7.5, W: 90, H: 71}, 135, 99)
+		}
+		drawImages(1, 0, 0, bdf.Rect{X: 0, Y: 0, W: 200, H: 300}, 100, 150)
+	}
+	fmt.Fprintf(&o.b, "#define RV_IMAGE_DOCUMENTS %d\n#define RV_IMAGE_RENDERS %d\n", len(docRows), len(rows))
+	o.comment("random documents that draw images, one for each format, one after the other: where each starts, how\n * long it is, and the format of its images")
+	o.bytes("rv_image_documents", all)
+	o.b.WriteString("static const struct {\n  size_t off, len;\n  const char *format;\n} rv_image_document[RV_IMAGE_DOCUMENTS] = {\n" + strings.Join(docRows, "\n") + "\n};\n\n")
+	o.comment("what the reference draws of them: the document, and the rest as in rv_render")
+	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_image_render[RV_IMAGE_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
+	o.write(path, "random drawings and random documents with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
 }
 
 func main() {
