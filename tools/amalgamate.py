@@ -33,14 +33,34 @@ ORDER = [
     "woff2.c",
     "text.c",
     "index.c",
+    "unicode.c",
+    "crypto.c",
     "version.c",
 ]
 
-LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s+"(bdf/bdf\.h|bdf_internal\.h)"\s*$')
+LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"\s*$')
+# the two headers every source includes, which come first in the output
+COMMON = {"bdf/bdf.h", "bdf_internal.h"}
+
+SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 
 
 def strip_local_includes(text: str) -> str:
-    return "\n".join(line for line in text.splitlines() if not LOCAL_INCLUDE.match(line)) + "\n"
+    """Drops the includes of the common headers, and puts the other headers
+    of src/ (generated tables) in the place of their include."""
+    out = []
+    for line in text.splitlines():
+        m = LOCAL_INCLUDE.match(line)
+        if not m:
+            out.append(line)
+        elif m.group(1) in COMMON:
+            continue
+        elif (SRC / m.group(1)).is_file():
+            out.append(f"/* ---- src/{m.group(1)} ---- */")
+            out.append((SRC / m.group(1)).read_text(encoding="utf-8").rstrip("\n"))
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
 
 
 def banner(name: str) -> str:

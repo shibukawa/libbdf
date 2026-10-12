@@ -12,7 +12,7 @@ bdf（Go の参照実装と TypeScript のビューア）とは別に、ネイ�
 
 ```
 core      コンテナ（single/split）、manifest（自前の JSON）、Part、deflate-raw（自前）、
-          Object のデコード、WOFF2 → SFNT、テキスト run（選択・検索・リンク）、暗号化（任意）
+          Object のデコード、WOFF2 → SFNT、テキスト run（選択・検索・リンク）、暗号化の開錠、区間
 raster    純粋な C のラスタライザ。bdf の raster/imagebdf の移植。FreeType で字形を取る
 adapters  core の命令列をフレームワークのキャンバスに流す薄い層
           skia/ (C++)  cairo/ (C)  qt/ (C++)  coregraphics/ (ObjC)
@@ -53,7 +53,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
 - **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
-- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text の 6 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。
+- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock の 7 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
 
 cgo を選んで purego にしなかったのは、`go build -asan` が cgo にしか効かないことと、同じツリーの C ソースを静的に結合したかったからである。利用者向けに cgo なしの Go 束縛を出すなら、そのときは purego で別に作る。
 
@@ -104,7 +104,7 @@ libbdf 側は `tests/conformance.c` が suite を読んで同じ検査をする�
 | .NET MAUI | NuGet（`runtimes/<rid>/native/` にバイナリ、P/Invoke の managed アセンブリ、SkiaSharp 上のアダプタ） |
 | Cocoa、Swift | `swift-bdf` リポジトリの Swift Package（xcframework の binaryTarget） |
 
-ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラが違っても壊れないことを CI の MSVC と clang の両方のビルドで確かめる。小さい依存（Brotli のデコーダ、plutosvg）は vendoring して既定ビルドを自己完結にし、大きい依存（FreeType、画像コーデック、Mbed TLS）は `find_package` で探してなければ `FetchContent` に落ちる、という二段構えにする。
+ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラが違っても壊れないことを CI の MSVC と clang の両方のビルドで確かめる。小さい依存（Brotli のデコーダ、plutosvg）は vendoring して既定ビルドを自己完結にし、大きい依存（FreeType、画像コーデック）は `find_package` で探してなければ `FetchContent` に落ちる、という二段構えにする。
 
 ## 9. 道筋
 
@@ -112,10 +112,34 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI への組み込みは bdf の次のリリース後。
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
 4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。残りは読み上げ用の構造（MARK の見出し・リスト・表・図）と、正規化つきの検索。
-5. 暗号化（Mbed TLS か platform の vtable）。
+5. ~~暗号化。~~ 済み。パスワードと ECDH の開錠、区間（§3.6）の合成。暗号の部品は自前（§11）。
 6. ラスタライザの移植と、bdf の golden との比較。
 7. アダプタ。最初は Skia（Chrome の Canvas 2D の実体なので TS 版との差が最も小さく、SkiaSharp 経由で MAUI もすぐ使える）。
 
 ## 10. 参考値
 
 検討の過程で測ったもの。bdf の Go 実装を macOS arm64 の c-shared にすると 6.8 MB、A4 を 2 px/unit で描いて約 30 ms。TS の Canvas アダプタは 621 行、テキスト層 869 行、コア 2,550 行で、C 版の規模の見積もりの根拠にしている。testdata の 101 文書では命令の 99.9 % が 16 種で、GROUP、MASK、SHADOW、BLEND≠0、ALPHA≠1 はそれぞれ数文書にしか現れない。
+
+## 11. 暗号化と区間
+
+**部品は自前で持つ**。当初は Mbed TLS か platform の API（CommonCrypto、CNG、OpenSSL）を vtable で差し替える案だったが、やめた。読み手に要るのは開錠だけで、SHA-256、HMAC、PBKDF2、HKDF、AES-256、AES-KW のアンラップ、GCM の復号、P-256 の ECDH の 8 つに限られる。乱数も署名も要らない（ECDH の秘密鍵は呼び出し側が OS の乱数で作って渡す。`bdf_p256_public_key` はその公開鍵を返すだけ）。`src/crypto.c` は 900 行あまりで libc にしか依存せず、単一ヘッダにそのまま入る。外部ライブラリを 1 つ足すと、単一ヘッダ、vcpkg、NuGet、xcframework のすべてで「暗号ライブラリをどう持ち込むか」が利用者の問題になる。その代価に見合わないと判断した。
+
+**検証**。部品ごとに Go の標準ライブラリと突き合わせている（`go/crypto_test.go`: ランダムな入力での一致と、`FuzzGCM`、`FuzzP256`）。C だけのテストは、Go が計算した既知解（RFC 4231、6070、5869、3394、FIPS 197 の入力を含む）を `tests/crypto_vectors.h` に持つ。文書の単位では、testdata の全文書を参照実装で暗号化して両方の読み手で開け、manifest と全 Part を比べる。改竄は 1 バイトずつ変えて、開くものと拒否するものが一致することを確かめる。
+
+**サイドチャネルへの立場**。
+
+- P-256 のスカラー倍は秘密鍵に依存しない。完全な加法公式（Renes–Costello–Batina、a = −3。Go の `nistec` と同じ）を使い、常に倍算と加算の両方を計算して、結果を定数時間の選択で取る。体の演算は 32 ビット limb の Montgomery 乗算で、分岐は最後の減算の選択だけ（これもマスク）。
+- GCM のタグ、AES-KW の検査値の比較は定数時間。タグが合わなければ平文は 1 バイトも書かない。
+- AES は S-box の表引き、GHASH は 4 ビットの表引きで、**キャッシュ タイミングには耐性がない**。Go の `crypto/aes` も AES-NI のない環境では同じ表引きに落ちる。読み手は自分の文書を自分の鍵で開けるだけなので、攻撃者が同じ機械で時間を測りながら復号を何度も走らせる場面は想定しにくい、という判断である。共有ホストで他人の文書を復号するサーバーに使うなら、この前提は成り立たない。
+- 鍵と、鍵から作った表は、使い終わったら `bdfi_wipe`（volatile 経由の書き込み）で消す。パスワードの NFC 形もそうする。
+
+**パスワードの NFC**。spec はパスワードを NFC にして UTF-8 にすると定める。`src/unicode_nfc.h` は `golang.org/x/text` の表から `go/genunicode` が作る（Unicode 17.0.0、分解 2,081 件、結合クラス 403 区間、合成 961 対、表は約 55 KB）。ハングルは算術。`FuzzNFC` で x/text と突き合わせて、2 つ食い違いが出た。
+
+- x/text は結合文字が 30 個を超えて続くと U+034F（CGJ）を挟む（Stream-Safe Text Format）。これは NFC そのものではなく、ブラウザの `String.prototype.normalize('NFC')` は挟まない。libbdf は挟まない。つまり **結合文字を 31 個以上続けたパスワード** は、Go の書き手と TS の読み手の間で鍵が食い違う（bdf 側の課題）。libbdf は TS と同じ鍵になる。差分テストはこの入力を飛ばす。
+- 不正な UTF-8 のうち、末尾で足りないマルチバイトの先頭バイトは、x/text が残りをそのまま写す。libbdf はこれに合わせた（パスワードが正しい UTF-8 なら関係しない）。
+
+**上限**。`iter` は 1〜10,000,000、password スロットの合計も 10,000,000 まで、ecdh スロットは 16 個まで。参照実装と同じ値で、同じ順に検査する。遅い CPU 向けに `BDF_MAX_KDF_ITERATIONS` をビルド時に下げられる（fuzz のビルドは 2,048）。
+
+**開錠後の文書**。`bdf_doc_unlock` が成功すると、封印された manifest が文書の manifest になり、`bdf_doc_view` などはそれを返す。外側の manifest は Part を取りに行くためだけに残る。封印された manifest の `parts[]` が指す `sealed` が外側に無ければ開錠の時点で拒否する（参照実装は Part を読むときに気づくが、結果は同じ）。開錠は文書を書き換えるので、スレッド間で共有する前に済ませる。
+
+**区間（§3.6）**。区間の文書は形としては 1 つの文書で、全ページの枠を持ち、自分のページにだけレイヤがある。`bdf_doc_add_segment(doc, segment)` は、segment のページを doc の同じ位置に入れ、segment の Part を doc の検索対象に足す。先に来た区間が持つ Part（共有のフォントやマスター）は後の区間に入っていないので、Part は「自分、次に足された区間の順」で探す。所有権は doc に移り、`bdf_doc_free(doc)` がまとめて解放する。渡した文書をさらに別の文書へ足すこと、渡した文書に区間を足すことは `BDF_ERR_ARG` で断る（Part の通し番号がずれるのと、二重解放を防ぐため）。view の id とページ数が違う文書は「別の文書の区間」として拒否する。区間ごとに鍵が違ってよく、平文の文書に区間を足すこともできる。

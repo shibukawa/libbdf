@@ -44,9 +44,9 @@ extern "C" {
 #endif
 
 #define BDF_VERSION_MAJOR  0
-#define BDF_VERSION_MINOR  4
+#define BDF_VERSION_MINOR  5
 #define BDF_VERSION_PATCH  0
-#define BDF_VERSION_STRING "0.4.0"
+#define BDF_VERSION_STRING "0.5.0"
 
 /* The wire format version and the instruction set (opset) this library reads. */
 #define BDF_FORMAT_VERSION 1
@@ -60,8 +60,9 @@ typedef enum bdf_status {
   BDF_ERR_FORMAT = 1,     /* malformed data; bdf_error says where */
   BDF_ERR_ARG = 2,        /* a NULL or out-of-range argument */
   BDF_ERR_NOMEM = 3,
-  BDF_ERR_UNSUPPORTED = 4 /* well-formed, but beyond this build or this library: a WOFF2 font
-                             without a Brotli decoder, a font collection, a WOFF 1.0 font */
+  BDF_ERR_UNSUPPORTED = 4, /* well-formed, but beyond this build or this library: a WOFF2 font
+                              without a Brotli decoder, a font collection, a WOFF 1.0 font */
+  BDF_ERR_PASSWORD = 5     /* the password, or the key, does not open the document */
 } bdf_status;
 
 /*
@@ -191,12 +192,58 @@ BDF_API bdf_status bdf_doc_open_split(const uint8_t *manifest, size_t len, const
                                       bdf_doc **out, bdf_error *err);
 BDF_API void bdf_doc_free(bdf_doc *doc);
 
-/* bdf_doc_encrypted reports an encryption block in the manifest; locked, that
- * it is encrypted and not unlocked (unlocking is not implemented yet, so the
- * two agree). The views of a locked document are those of its outer
- * manifest: none; its parts are the sealed parts, as stored. */
+/* bdf_doc_encrypted reports an encrypted document (spec §3.5); locked, one
+ * that is not unlocked yet. The views of a locked document are those of its
+ * outer manifest: none; its parts are the sealed parts, as stored. */
 BDF_API int bdf_doc_encrypted(const bdf_doc *doc);
 BDF_API int bdf_doc_locked(const bdf_doc *doc);
+
+/*
+ * bdf_doc_unlock opens an encrypted document with its password (UTF-8; it is
+ * normalised to NFC, as the format asks): the sealed manifest becomes the
+ * manifest of the document, with its views, and bdf_doc_part opens the
+ * parts. BDF_ERR_PASSWORD when no key slot opens with the password; the
+ * document then stays locked, and another password can be tried. A document
+ * that is not locked is BDF_ERR_ARG. Deriving the key takes a moment: the
+ * format's 600,000 iterations are a few tenths of a second, and a file may
+ * ask for up to ten million.
+ *
+ * Unlock a document before it is shared between threads.
+ */
+BDF_API bdf_status bdf_doc_unlock(bdf_doc *doc, const char *password, size_t len, bdf_error *err);
+/* The iterations of the key derivation a document may ask for, over all its
+ * password slots together: the format's limit. A build for a slow processor
+ * may define a lower one; a document that asks for more is then refused as
+ * malformed. */
+#ifndef BDF_MAX_KDF_ITERATIONS
+#define BDF_MAX_KDF_ITERATIONS 10000000
+#endif
+/*
+ * bdf_doc_unlock_ecdh opens a document sealed for one reader (an ecdh key
+ * slot; a segment a server sealed for one request, spec §3.6) with the
+ * reader's private key: a P-256 scalar of 32 bytes, big-endian.
+ * BDF_ERR_PASSWORD when no key slot opens with it.
+ */
+BDF_API bdf_status bdf_doc_unlock_ecdh(bdf_doc *doc, const uint8_t private_key[32],
+                                       bdf_error *err);
+/* bdf_p256_public_key is the public key of a private key (32 random bytes
+ * that make a number from 1 to the order of the curve less 1), as the
+ * uncompressed point of 65 bytes a segment request carries. BDF_ERR_ARG for a
+ * private key out of range: draw another. */
+BDF_API bdf_status bdf_p256_public_key(const uint8_t private_key[32], uint8_t out[65]);
+
+/*
+ * bdf_doc_add_segment puts the pages a segment document carries into doc
+ * (spec §3.6): doc is the first segment that came, or a document of the same
+ * views and pages, and segment one that came later, unlocked. Its parts are
+ * added to those of doc, and its pages may draw parts earlier segments
+ * brought. A segment of other views or pages is refused as one of another
+ * document. On success doc owns segment: it is freed with doc, and is not
+ * to be used or freed on its own. A document that was given away so takes no
+ * segments itself and cannot be given again (BDF_ERR_ARG): add every segment
+ * to the same document.
+ */
+BDF_API bdf_status bdf_doc_add_segment(bdf_doc *doc, bdf_doc *segment, bdf_error *err);
 BDF_API int bdf_doc_split(const bdf_doc *doc);
 
 /* bdf_doc_opset is the manifest's opset: 0 when it states none. */
@@ -327,6 +374,10 @@ typedef struct bdf_part_entry {
   const uint8_t *sealed; /* encrypted documents: the sealed part, or NULL */
 } bdf_part_entry;
 
+/* The parts of a document: those of its manifest (once unlocked, of the
+ * sealed one), and after them those of the segments it took, in the order
+ * they were added. A part two of them carry is listed twice and read from
+ * the first. */
 BDF_API size_t bdf_doc_part_count(const bdf_doc *doc);
 BDF_API bdf_status bdf_doc_part_entry(const bdf_doc *doc, size_t i, bdf_part_entry *out);
 /* bdf_doc_part_find fills out (when not NULL) and returns 1 when the manifest

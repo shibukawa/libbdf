@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.4.0
+  VERSION 0.5.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -36,6 +36,8 @@ set(BDF_SOURCES
   src/woff2.c
   src/text.c
   src/index.c
+  src/unicode.c
+  src/crypto.c
   src/version.c)
 
 if(BDF_WITH_BROTLI)
@@ -98,7 +100,7 @@ if(Python3_Interpreter_FOUND)
   set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
   add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
-    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h include/bdf/bdf.h tools/amalgamate.py
+    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/unicode_nfc.h include/bdf/bdf.h tools/amalgamate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating the single-header bdf.h"
     VERBATIM)
@@ -113,6 +115,9 @@ if(BDF_BUILD_FUZZ)
   # Objects that draw each other again and again are stopped by a limit that
   # takes seconds to reach; a fuzzer learns as much from a lower one.
   target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_INSTRUCTIONS=65536)
+  # A document may ask for ten million iterations of its key derivation:
+  # seconds for each input.
+  target_compile_definitions(bdf PRIVATE BDF_MAX_KDF_ITERATIONS=2048)
   add_subdirectory(fuzz)
 endif()
 

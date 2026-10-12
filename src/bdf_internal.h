@@ -392,4 +392,73 @@ BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, cons
                                                 size_t glyf_len, const uint8_t *loca,
                                                 size_t loca_len, uint8_t **out, size_t *out_len);
 
+/* ---- Unicode ------------------------------------------------------------ */
+
+/* bdfi_nfc normalises UTF-8 to form C into a buffer of its own (NUL after
+ * it): 0, or -1 when out of memory. Bytes that are not UTF-8 are kept. */
+BDF_INTERNAL int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len);
+
+/* ---- Cryptography (spec §3.5) ------------------------------------------- */
+
+/* bdfi_wipe clears memory that held a secret, in a way a compiler keeps. */
+BDF_INTERNAL void bdfi_wipe(void *p, size_t n);
+
+typedef struct bdfi_sha256 {
+  uint32_t h[8];
+  uint64_t len;
+  uint8_t buf[64];
+  size_t n;
+} bdfi_sha256;
+
+BDF_INTERNAL void bdfi_sha256_init(bdfi_sha256 *s);
+BDF_INTERNAL void bdfi_sha256_update(bdfi_sha256 *s, const void *data, size_t len);
+BDF_INTERNAL void bdfi_sha256_final(bdfi_sha256 *s, uint8_t out[32]);
+BDF_INTERNAL void bdfi_sha256_of(const void *data, size_t len, uint8_t out[32]);
+BDF_INTERNAL void bdfi_hmac_sha256(const uint8_t *key, size_t key_len, const void *data,
+                                   size_t len, uint8_t out[32]);
+/* A key of 32 bytes from a password: PBKDF2-HMAC-SHA-256 (iterations >= 1). */
+BDF_INTERNAL void bdfi_pbkdf2_sha256(const void *password, size_t password_len,
+                                     const uint8_t *salt, size_t salt_len, uint32_t iterations,
+                                     uint8_t out[32]);
+/* A key of 32 bytes from a shared secret: HKDF-SHA-256. */
+BDF_INTERNAL void bdfi_hkdf_sha256(const uint8_t *ikm, size_t ikm_len, const uint8_t *salt,
+                                   size_t salt_len, const void *info, size_t info_len,
+                                   uint8_t out[32]);
+
+typedef struct bdfi_aes {
+  uint8_t rk[240]; /* the 15 round keys of AES-256 */
+  uint8_t sbox[256], inv[256];
+} bdfi_aes;
+
+BDF_INTERNAL void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]);
+BDF_INTERNAL void bdfi_aes256_encrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16]);
+BDF_INTERNAL void bdfi_aes256_decrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16]);
+
+#define BDFI_KW_MAX_KEY 64
+/* bdfi_aes_kw_unwrap unwraps a key of len − 8 bytes (RFC 3394) into out: 0,
+ * or -1 when the length is none of a wrapped key or the check value fails. */
+BDF_INTERNAL int bdfi_aes_kw_unwrap(const uint8_t kek[32], const uint8_t *wrapped, size_t len,
+                                    uint8_t *out);
+
+typedef struct bdfi_gcm {
+  bdfi_aes aes;
+  uint64_t mh[16], ml[16]; /* the hash key times the polynomial of each nibble */
+  uint64_t red[16];        /* what four bits shifted out come back as */
+} bdfi_gcm;
+
+BDF_INTERNAL void bdfi_gcm_init(bdfi_gcm *g, const uint8_t key[32]);
+/* bdfi_gcm_open checks the tag and decrypts ct into out (as long): 0, or -1
+ * when the data is not authentic, and then nothing is written. */
+BDF_INTERNAL int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad,
+                               size_t aad_len, const uint8_t *ct, size_t ct_len,
+                               const uint8_t tag[16], uint8_t *out);
+
+/* bdfi_p256_public is the public key of a private key, as an uncompressed
+ * point: 0, or -1 for a private key out of range. */
+BDF_INTERNAL int bdfi_p256_public(const uint8_t private_key[32], uint8_t out[65]);
+/* bdfi_p256_ecdh is the shared secret (the x coordinate): 0, -1 for a
+ * private key out of range, -2 for a peer that is no point of the curve. */
+BDF_INTERNAL int bdfi_p256_ecdh(const uint8_t private_key[32], const uint8_t peer[65],
+                                uint8_t out[32]);
+
 #endif /* BDF_INTERNAL_H */
