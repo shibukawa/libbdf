@@ -246,6 +246,38 @@ jobs:
       - run: go test ./...
       - run: go test -asan ./...
 
+  # The conformance suite of bdf (its package conformance, `bdf conformance`):
+  # written by the version of bdf the harness is pinned to (go/go.mod), from
+  # that version's test documents, and run by test_conformance. The versions
+  # of bdf up to 0.1.5 have no suite: the job then says so and runs nothing.
+  # Raising the version in go/go.mod is what turns it on.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: go/go.sum
+      - name: Write the suite
+        id: suite
+        working-directory: go
+        run: |
+          dir=$(go list -m -f '{{.Dir}}' github.com/shibukawa/bdf)
+          version=$(go list -m -f '{{.Version}}' github.com/shibukawa/bdf)
+          if [ ! -d "$dir/conformance" ]; then
+            echo "::notice::bdf $version has no conformance suite: nothing is run"
+            exit 0
+          fi
+          go run "github.com/shibukawa/bdf/cmd/bdf@$version" conformance -testdata "$dir/testdata" "$RUNNER_TEMP/suite"
+          echo "dir=$RUNNER_TEMP/suite" >> "$GITHUB_OUTPUT"
+      - name: Run it
+        if: steps.suite.outputs.dir != ''
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_CONFORMANCE_DIR="${{ steps.suite.outputs.dir }}"
+          cmake --build build --target test_conformance
+          ctest --test-dir build -R '^conformance$' --output-on-failure
+
   # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
   fuzz:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.fuzz-minutes != '0'

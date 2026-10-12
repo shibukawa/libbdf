@@ -197,8 +197,10 @@ if(BDF_INSTALL)
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bdf)
   # The prefix of the pkg-config files is where they are found, so that an
   # installed tree can be moved (and installed with --prefix).
-  file(RELATIVE_PATH BDF_PC_PREFIX "/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "/")
-  string(REGEX REPLACE "/$" "" BDF_PC_PREFIX "${BDF_PC_PREFIX}")
+  # (from a place that is a full path on every system: only what is
+  # relative of it is kept)
+  set(BDF_PC_ROOT "${CMAKE_CURRENT_BINARY_DIR}/prefix")
+  file(RELATIVE_PATH BDF_PC_PREFIX "${BDF_PC_ROOT}/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "${BDF_PC_ROOT}")
   configure_file(cmake/bdf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
