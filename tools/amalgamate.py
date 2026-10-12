@@ -8,6 +8,11 @@ too to keep the API out of the link namespace. The implementation is C11;
 a C++ translation unit should include the header without BDF_IMPLEMENTATION
 and compile the implementation in a .c file of its own.
 
+WOFF2 fonts need a Brotli decoder, which the single header does not carry:
+define BDF_HAVE_BROTLI and link libbrotlidec (or compile third_party/brotli
+with it) to decode them; without it bdf_woff2_decode reports
+BDF_ERR_UNSUPPORTED.
+
 The split sources stay the form the library is developed and tested in;
 this script runs at build time (the bdf_single_header target) and at
 release time.
@@ -25,6 +30,7 @@ ORDER = [
     "json.c",
     "manifest.c",
     "doc.c",
+    "woff2.c",
     "version.c",
 ]
 
@@ -35,14 +41,19 @@ def strip_local_includes(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not LOCAL_INCLUDE.match(line)) + "\n"
 
 
+def banner(name: str) -> str:
+    return f"\n/* ==== {name} {'=' * max(1, 70 - len(name))} */\n\n"
+
+
 def main() -> None:
     root = pathlib.Path(__file__).resolve().parent.parent
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("-o", "--output", type=pathlib.Path, default=root / "dist" / "bdf.h")
     args = ap.parse_args()
 
+    src = root / "src"
     public = (root / "include" / "bdf" / "bdf.h").read_text(encoding="utf-8")
-    internal = (root / "src" / "bdf_internal.h").read_text(encoding="utf-8")
+    internal = (src / "bdf_internal.h").read_text(encoding="utf-8")
     version = re.search(r'#define BDF_VERSION_STRING\s+"([^"]+)"', public).group(1)
 
     out = []
@@ -52,12 +63,17 @@ def main() -> None:
     out.append(public)
     out.append("\n#ifdef BDF_IMPLEMENTATION\n")
     out.append("#ifndef BDF_INTERNAL\n#define BDF_INTERNAL static\n#endif\n")
-    out.append("\n/* ==== src/bdf_internal.h ================================================= */\n\n")
+    out.append(banner("src/bdf_internal.h"))
     out.append(strip_local_includes(internal))
     for name in ORDER:
-        text = (root / "src" / name).read_text(encoding="utf-8")
-        out.append(f"\n/* ==== src/{name} {'=' * max(1, 70 - len(name))} */\n\n")
-        out.append(strip_local_includes(text))
+        out.append(banner(f"src/{name}"))
+        out.append(strip_local_includes((src / name).read_text(encoding="utf-8")))
+    out.append(banner("src/brotli_glue.c (BDF_HAVE_BROTLI) / src/brotli_none.c"))
+    out.append("#ifdef BDF_HAVE_BROTLI\n")
+    out.append(strip_local_includes((src / "brotli_glue.c").read_text(encoding="utf-8")))
+    out.append("#else\n")
+    out.append(strip_local_includes((src / "brotli_none.c").read_text(encoding="utf-8")))
+    out.append("#endif /* BDF_HAVE_BROTLI */\n")
     out.append("\n#endif /* BDF_IMPLEMENTATION */\n")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

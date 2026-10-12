@@ -5,7 +5,7 @@
 package cbdf
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../include -std=c11 -Wall -Wextra
+#cgo CFLAGS: -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/brotli/include -I${SRCDIR}/../third_party/brotli/dec -I${SRCDIR}/../third_party/brotli/common -std=c11 -Wall -Wextra
 #include <stdlib.h>
 #include "bdf/bdf.h"
 */
@@ -595,4 +595,41 @@ func (d *Doc) SealedManifest() (hash [16]byte, enc string, ok bool) {
 		return hash, "", false
 	}
 	return hash16(p), goString(cenc, l), true
+}
+
+// ---- Fonts ------------------------------------------------------------------
+
+// Woff2Available reports bdf_woff2_available().
+func Woff2Available() bool { return C.bdf_woff2_available() != 0 }
+
+// Woff2Decode unpacks a WOFF2 font with bdf_woff2_decode.
+func Woff2Decode(data []byte) ([]byte, error) {
+	var out *C.uint8_t
+	var n C.size_t
+	var e C.bdf_error
+	if C.bdf_woff2_decode(ptr(data), C.size_t(len(data)), &out, &n, &e) != C.BDF_OK {
+		return nil, errorOf(&e)
+	}
+	defer C.bdf_free(unsafe.Pointer(out))
+	b := goBytes(out, n)
+	if b == nil {
+		b = []byte{}
+	}
+	return b, nil
+}
+
+// FontSFNT returns a font part as an sfnt font with bdf_font_sfnt.
+func FontSFNT(data []byte) ([]byte, error) {
+	var out *C.uint8_t
+	var n C.size_t
+	var e C.bdf_error
+	if C.bdf_font_sfnt(ptr(data), C.size_t(len(data)), &out, &n, &e) != C.BDF_OK {
+		return nil, errorOf(&e)
+	}
+	defer C.bdf_free(unsafe.Pointer(out))
+	b := goBytes(out, n)
+	if b == nil {
+		b = []byte{}
+	}
+	return b, nil
 }

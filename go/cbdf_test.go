@@ -17,6 +17,7 @@ import (
 
 	"github.com/klauspost/compress/flate"
 	"github.com/shibukawa/bdf"
+	"github.com/shibukawa/bdf/font/woff2"
 )
 
 // testdataDir is the testdata directory of the pinned bdf module: the
@@ -687,6 +688,89 @@ func FuzzDoc(f *testing.F) {
 			if werr == nil && !bytes.Equal(want, got) {
 				t.Fatalf("part %x: %d bytes differ from %d", e.Hash, len(got), len(want))
 			}
+		}
+	})
+}
+
+// ---- Fonts ------------------------------------------------------------------
+
+// fontParts returns the font parts of every document.
+func fontParts(t testing.TB) []part {
+	t.Helper()
+	var out []part
+	for _, f := range documents(t) {
+		r, err := bdf.OpenSingleFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		if r.Locked() && r.Unlock("demo-パスワード") != nil {
+			r.Close()
+			continue
+		}
+		for _, e := range r.Manifest.Parts {
+			if e.T != bdf.PartFont {
+				continue
+			}
+			data, err := r.Part(e.H)
+			if err != nil {
+				t.Fatalf("%s %s: %v", f, e.H, err)
+			}
+			out = append(out, part{filepath.Base(f), e.H.String(), e.T, data})
+		}
+		r.Close()
+	}
+	return out
+}
+
+// TestFontsMatchReference decodes every embedded font with both WOFF2
+// decoders and requires the same bytes; fonts stored as sfnt pass through.
+func TestFontsMatchReference(t *testing.T) {
+	if !Woff2Available() {
+		t.Skip("built without Brotli")
+	}
+	n, raw := 0, 0
+	for _, p := range fontParts(t) {
+		if !woff2.IsWOFF(p.data) {
+			got, err := FontSFNT(p.data)
+			if err != nil || !bytes.Equal(got, p.data) {
+				t.Errorf("%s %s: sfnt passthrough: %v", p.doc, p.hash, err)
+			}
+			raw++
+			continue
+		}
+		want, werr := woff2.Decode(p.data)
+		got, gerr := Woff2Decode(p.data)
+		if (werr == nil) != (gerr == nil) {
+			t.Errorf("%s %s: reference %v, libbdf %v", p.doc, p.hash, werr, gerr)
+			continue
+		}
+		if !bytes.Equal(want, got) {
+			t.Errorf("%s %s: %d bytes differ from %d", p.doc, p.hash, len(got), len(want))
+		}
+		n++
+	}
+	t.Logf("%d WOFF2 fonts compared, %d sfnt fonts passed through", n, raw)
+}
+
+// FuzzWOFF2 requires both decoders to accept the same fonts with the same
+// bytes.
+func FuzzWOFF2(f *testing.F) {
+	if !Woff2Available() {
+		f.Skip("built without Brotli")
+	}
+	for _, p := range fontParts(f) {
+		f.Add(p.data)
+	}
+	f.Add([]byte("wOF2"))
+	f.Add(append([]byte("wOF2"), bytes.Repeat([]byte{0}, 60)...))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		want, werr := woff2.Decode(data)
+		got, gerr := Woff2Decode(data)
+		if (werr == nil) != (gerr == nil) {
+			t.Fatalf("reference %v, libbdf %v", werr, gerr)
+		}
+		if werr == nil && !bytes.Equal(want, got) {
+			t.Fatalf("outputs differ: %d and %d bytes", len(want), len(got))
 		}
 	})
 }

@@ -57,9 +57,11 @@ BDF_API const char *bdf_version(void);
 
 typedef enum bdf_status {
   BDF_OK = 0,
-  BDF_ERR_FORMAT = 1, /* malformed or unsupported data; bdf_error says where */
-  BDF_ERR_ARG = 2,    /* a NULL or out-of-range argument */
-  BDF_ERR_NOMEM = 3
+  BDF_ERR_FORMAT = 1,     /* malformed data; bdf_error says where */
+  BDF_ERR_ARG = 2,        /* a NULL or out-of-range argument */
+  BDF_ERR_NOMEM = 3,
+  BDF_ERR_UNSUPPORTED = 4 /* well-formed, but beyond this build or this library: a WOFF2 font
+                             without a Brotli decoder, a font collection, a WOFF 1.0 font */
 } bdf_status;
 
 /*
@@ -125,6 +127,31 @@ BDF_API void bdf_hash_format(const uint8_t hash[16], char out[33]);
  */
 BDF_API bdf_status bdf_inflate(const uint8_t *data, size_t len, size_t limit, uint8_t **out,
                                size_t *out_len, bdf_error *err);
+
+/* ---- Fonts (spec §6.1) -------------------------------------------------- */
+
+/* bdf_woff2_available reports whether this build decodes WOFF2 fonts (a
+ * Brotli decoder is compiled in). */
+BDF_API int bdf_woff2_available(void);
+
+/*
+ * bdf_woff2_decode unpacks a WOFF2 font into an sfnt font (TrueType or
+ * CFF-flavored OpenType) the caller frees with bdf_free, rebuilding the
+ * transformed glyf, loca and hmtx tables as the reference does: loca in the
+ * long format with head.indexToLocFormat set to 1, the tables sorted by tag.
+ * Font collections are BDF_ERR_UNSUPPORTED.
+ */
+BDF_API bdf_status bdf_woff2_decode(const uint8_t *data, size_t len, uint8_t **out,
+                                    size_t *out_len, bdf_error *err);
+
+/*
+ * bdf_font_sfnt returns the bytes of a font part as an sfnt font a font
+ * engine loads, in a buffer the caller frees with bdf_free: WOFF2 decoded,
+ * TrueType and OpenType (including collections) copied as they are. WOFF
+ * 1.0 is BDF_ERR_UNSUPPORTED; anything else is not a font.
+ */
+BDF_API bdf_status bdf_font_sfnt(const uint8_t *data, size_t len, uint8_t **out,
+                                 size_t *out_len, bdf_error *err);
 
 /* ---- Documents (spec §3, §4) -------------------------------------------- */
 

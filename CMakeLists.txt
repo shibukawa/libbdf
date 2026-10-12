@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.2.0
+  VERSION 0.3.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -13,6 +13,7 @@ option(BDF_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
 option(BDF_BUILD_FUZZ "Build the libFuzzer harnesses (clang only)" OFF)
 option(BDF_WERROR "Treat warnings as errors" OFF)
 option(BDF_INSTALL "Generate the install rules" ${PROJECT_IS_TOP_LEVEL})
+option(BDF_WITH_BROTLI "Decode WOFF2 fonts with the vendored Brotli decoder (third_party/brotli)" ON)
 set(BDF_SANITIZE "" CACHE STRING "Sanitizers to build everything with, e.g. address,undefined")
 set(BDF_CONFORMANCE_DIR "" CACHE PATH "A conformance suite written by `bdf conformance`, run by ctest")
 
@@ -21,7 +22,9 @@ if(BDF_SANITIZE)
   add_link_options(-fsanitize=${BDF_SANITIZE})
 endif()
 
-# The sources, in the order tools/amalgamate.py joins them.
+# The sources, in the order tools/amalgamate.py joins them. The Brotli glue
+# is chosen by BDF_WITH_BROTLI; the single-header form takes it from
+# BDF_HAVE_BROTLI.
 set(BDF_SOURCES
   src/reader.c
   src/object.c
@@ -30,14 +33,38 @@ set(BDF_SOURCES
   src/json.c
   src/manifest.c
   src/doc.c
+  src/woff2.c
   src/version.c)
 
-add_library(bdf ${BDF_SOURCES})
+if(BDF_WITH_BROTLI)
+  set(BDF_GLUE src/brotli_glue.c)
+  file(GLOB BDF_BROTLI_SOURCES CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/brotli/common/*.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/brotli/dec/*.c)
+  set(BDF_BROTLI_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/third_party/brotli/include)
+  # Compiled apart, with its own (default) warnings, into objects the library
+  # takes in; its symbols stay hidden.
+  add_library(bdf_brotli OBJECT ${BDF_BROTLI_SOURCES})
+  target_include_directories(bdf_brotli PRIVATE ${BDF_BROTLI_INCLUDE})
+  set_target_properties(bdf_brotli PROPERTIES
+    C_VISIBILITY_PRESET hidden
+    POSITION_INDEPENDENT_CODE ON)
+  set(BDF_BROTLI_OBJECTS $<TARGET_OBJECTS:bdf_brotli>)
+else()
+  set(BDF_GLUE src/brotli_none.c)
+  set(BDF_BROTLI_INCLUDE "")
+  set(BDF_BROTLI_OBJECTS "")
+endif()
+
+add_library(bdf ${BDF_SOURCES} ${BDF_GLUE} ${BDF_BROTLI_OBJECTS})
 add_library(bdf::bdf ALIAS bdf)
 
 target_include_directories(bdf PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+if(BDF_BROTLI_INCLUDE)
+  target_include_directories(bdf PRIVATE ${BDF_BROTLI_INCLUDE})
+endif()
 target_compile_features(bdf PUBLIC c_std_11)
 set_target_properties(bdf PROPERTIES
   C_VISIBILITY_PRESET hidden
@@ -67,7 +94,7 @@ if(Python3_Interpreter_FOUND)
   set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
   add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
-    DEPENDS ${BDF_SOURCES} src/bdf_internal.h include/bdf/bdf.h tools/amalgamate.py
+    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h include/bdf/bdf.h tools/amalgamate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating the single-header bdf.h"
     VERBATIM)
