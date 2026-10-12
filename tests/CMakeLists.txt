@@ -1,5 +1,5 @@
-set(BDF_TESTS object header inflate manifest doc)
-set(BDF_FUZZ_TARGETS object inflate manifest doc)
+set(BDF_TESTS object header inflate manifest doc font)
+set(BDF_FUZZ_TARGETS object inflate manifest doc woff2)
 
 if(MSVC)
   set(BDF_TEST_WARNINGS /W4)
@@ -25,11 +25,35 @@ foreach(target ${BDF_FUZZ_TARGETS})
   add_test(NAME replay-${target} COMMAND test_replay_${target} ${inputs})
 endforeach()
 
+# Tests built from the sources, which reach the internals: the WOFF2
+# transforms on their own, and the conformance runner, which reads suite.json
+# with the library's own JSON reader.
+set(BDF_ABS_SOURCES ${BDF_SOURCES} ${BDF_GLUE})
+list(TRANSFORM BDF_ABS_SOURCES PREPEND ${PROJECT_SOURCE_DIR}/)
+foreach(name woff2_internal conformance)
+  add_executable(test_${name} ${name}.c ${BDF_ABS_SOURCES} ${BDF_BROTLI_OBJECTS})
+  target_include_directories(test_${name} PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+  if(BDF_BROTLI_INCLUDE)
+    target_include_directories(test_${name} SYSTEM PRIVATE ${BDF_BROTLI_INCLUDE})
+  endif()
+  target_compile_features(test_${name} PRIVATE c_std_11)
+  target_compile_options(test_${name} PRIVATE ${BDF_TEST_WARNINGS})
+endforeach()
+add_test(NAME woff2-internal COMMAND test_woff2_internal)
+if(BDF_CONFORMANCE_DIR)
+  add_test(NAME conformance COMMAND test_conformance ${BDF_CONFORMANCE_DIR})
+endif()
+
 # The same unit tests against the single-header form, compiled with the
-# library's warnings: the amalgamation must be as clean as the sources.
+# library's warnings: the amalgamation must be as clean as the sources. With
+# Brotli, the single header takes the decoder through BDF_HAVE_BROTLI.
 if(Python3_Interpreter_FOUND)
-  add_library(bdf_single STATIC single_impl.c ${BDF_SINGLE_HEADER})
+  add_library(bdf_single STATIC single_impl.c ${BDF_SINGLE_HEADER} ${BDF_BROTLI_OBJECTS})
   target_include_directories(bdf_single PUBLIC ${BDF_SINGLE_HEADER_DIR})
+  if(BDF_WITH_BROTLI)
+    target_compile_definitions(bdf_single PRIVATE BDF_HAVE_BROTLI)
+    target_include_directories(bdf_single SYSTEM PRIVATE ${BDF_BROTLI_INCLUDE})
+  endif()
   target_compile_features(bdf_single PUBLIC c_std_11)
   target_compile_options(bdf_single PRIVATE ${BDF_WARNINGS})
   add_dependencies(bdf_single bdf_single_header)
@@ -39,17 +63,4 @@ if(Python3_Interpreter_FOUND)
     target_compile_options(test_${name}_single PRIVATE ${BDF_TEST_WARNINGS})
     add_test(NAME ${name}-single COMMAND test_${name}_single)
   endforeach()
-endif()
-
-# The conformance suite of the reference implementation (bdf conformance),
-# when one is at hand. The runner reads suite.json with the library's own
-# JSON reader, so it is built from the sources rather than linked.
-set(BDF_ABS_SOURCES ${BDF_SOURCES})
-list(TRANSFORM BDF_ABS_SOURCES PREPEND ${PROJECT_SOURCE_DIR}/)
-add_executable(test_conformance conformance.c ${BDF_ABS_SOURCES})
-target_include_directories(test_conformance PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
-target_compile_features(test_conformance PRIVATE c_std_11)
-target_compile_options(test_conformance PRIVATE ${BDF_TEST_WARNINGS})
-if(BDF_CONFORMANCE_DIR)
-  add_test(NAME conformance COMMAND test_conformance ${BDF_CONFORMANCE_DIR})
 endif()

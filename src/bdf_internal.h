@@ -270,4 +270,32 @@ BDF_INTERNAL bdf_status bdfi_manifest_parse(const uint8_t *json, size_t len, bdf
                                             bdf_error *err);
 BDF_INTERNAL void bdfi_manifest_free(bdfi_manifest *m);
 
+/* ---- WOFF2 -------------------------------------------------------------- */
+
+/*
+ * bdfi_brotli_decompress reads the first size bytes of a Brotli stream into
+ * a malloc'd buffer (of size + 1 bytes; the caller uses size). A stream that
+ * ends before size bytes, or without its final block when it holds exactly
+ * size bytes, is an error; what follows size + 1 bytes is not read.
+ * brotli_glue.c implements it over the Brotli decoder, brotli_none.c
+ * refuses with BDF_ERR_UNSUPPORTED.
+ */
+BDF_INTERNAL bdf_status bdfi_brotli_decompress(const uint8_t *in, size_t in_len, size_t size,
+                                               uint8_t **out, bdf_error *err);
+/* bdfi_woff2_read_base128 reads a UIntBase128 at *pos: 0, or -1 when malformed. */
+BDF_INTERNAL int bdfi_woff2_read_base128(const uint8_t *b, size_t len, size_t *pos,
+                                         uint32_t *out);
+/* bdfi_woff2_rebuild_glyf reverses the glyf transform of a transformed glyf
+ * table: the glyf table and a long-format loca, both malloc'd. */
+BDF_INTERNAL bdf_status bdfi_woff2_rebuild_glyf(const uint8_t *t, size_t n, uint8_t **glyf,
+                                                size_t *glyf_len, uint8_t **loca,
+                                                size_t *loca_len);
+/* bdfi_woff2_rebuild_hmtx reverses the hmtx transform, with the hhea, maxp,
+ * glyf and loca tables of the font (NULL when absent). */
+BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, const uint8_t *hhea,
+                                                size_t hhea_len, const uint8_t *maxp,
+                                                size_t maxp_len, const uint8_t *glyf,
+                                                size_t glyf_len, const uint8_t *loca,
+                                                size_t loca_len, uint8_t **out, size_t *out_len);
+
 #endif /* BDF_INTERNAL_H */

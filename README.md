@@ -6,9 +6,10 @@ What exists today is the core's reading side:
 
 - `include/bdf/bdf.h` — the public C ABI (opaque handles, length-tagged strings, nothing global; see the header's preamble for the rules)
 - the single-file and split containers, the manifest (its own JSON reader, the checks of the reference), parts with their deflate-raw decoder, the Object part decoder with its instruction iterator, and path collections — each ported from the reference implementation check for check, with no dependency beyond libc
-- unit tests, libFuzzer targets, a differential test harness in Go that runs every document, part and object of the reference's test documents through both readers, and a runner for the reference's conformance suite
+- WOFF2 fonts unpacked to sfnt (`bdf_woff2_decode`, `bdf_font_sfnt`), byte for byte what the reference's `font/woff2` makes of them, over the Brotli decoder vendored under `third_party/brotli` (MIT; the one dependency, and optional)
+- unit tests, libFuzzer targets, a differential test harness in Go that runs every document, part, object and font of the reference's test documents through both readers, and a runner for the reference's conformance suite
 
-Planned, in order: WOFF2 → SFNT, text runs for selection and search, encryption, the rasterizer ported from `raster/imagebdf`, the adapters. [docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
+Planned, in order: text runs for selection and search, encryption, the rasterizer ported from `raster/imagebdf`, the adapters. [docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
 
 ## Relation to bdf
 
@@ -34,21 +35,22 @@ CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). Options:
 | `BDF_BUILD_FUZZ` | OFF | the libFuzzer harnesses (clang) |
 | `BDF_SANITIZE` | empty | e.g. `address,undefined` |
 | `BDF_WERROR` | OFF | warnings as errors (CI turns it on) |
+| `BDF_WITH_BROTLI` | ON | decode WOFF2 fonts with the vendored Brotli decoder; OFF makes `bdf_woff2_decode` report `BDF_ERR_UNSUPPORTED` |
 | `BDF_CONFORMANCE_DIR` | empty | a suite written by `bdf conformance`, run by `ctest` |
 
 Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg-config bdf`, or with `FetchContent` on this repository.
 
 ### The single header
 
-`tools/amalgamate.py` joins the sources into one `bdf.h` (the `bdf_single_header` target writes it to `build/single/bdf/bdf.h`; CI publishes it as an artifact). Include it anywhere for the declarations; define `BDF_IMPLEMENTATION` in exactly one C translation unit before including it to get the library, and `BDF_STATIC` as well to keep it out of the link namespace. The implementation is C11, so a C++ project compiles it in a `.c` file of its own. The unit tests run against the single header too, with the library's warnings as errors.
+`tools/amalgamate.py` joins the sources into one `bdf.h` (the `bdf_single_header` target writes it to `build/single/bdf/bdf.h`; CI publishes it as an artifact). Include it anywhere for the declarations; define `BDF_IMPLEMENTATION` in exactly one C translation unit before including it to get the library, and `BDF_STATIC` as well to keep it out of the link namespace. The implementation is C11, so a C++ project compiles it in a `.c` file of its own. The single header carries no Brotli decoder: define `BDF_HAVE_BROTLI` and link libbrotlidec (or compile `third_party/brotli` alongside) to decode WOFF2 fonts; without it they are `BDF_ERR_UNSUPPORTED`. The unit tests run against the single header too, with the library's warnings as errors.
 
 ## Testing
 
 - `ctest` — unit tests of the decoders (`tests/`), against the library and against the single header, and the replay of `fuzz/regress/<target>/`.
-- `cd go && go test ./...` — the differential tests. They need Go 1.27 and a C compiler; the C sources are compiled into the package, so no CMake build is needed first. On Linux, `go test -asan ./...` runs the same with AddressSanitizer. `BDF_TESTDATA=/path/to/bdf/testdata` points the tests at a checkout instead of the pinned module.
+- `cd go && go test ./...` — the differential tests. They need Go 1.27 and a C compiler; the C sources are compiled into the package through symlinks (`go/*.c` → `src/`, `third_party/brotli/`), so no CMake build is needed first and Go's build cache follows edits to the sources. On Linux, `go test -asan ./...` runs the same with AddressSanitizer. `BDF_TESTDATA=/path/to/bdf/testdata` points the tests at a checkout instead of the pinned module.
 - The conformance suite: `bdf conformance -testdata testdata <dir>` in a checkout of bdf (or the `bdf-conformance` artifact of its CI and releases) writes it; `cmake -DBDF_CONFORMANCE_DIR=<dir>` adds it to `ctest`, or run `./build/tests/test_conformance <dir>`.
 - Fuzzing is run on demand, not in CI (the sanitizer job replays the tests instead). libFuzzer: `cmake -B build -DBDF_BUILD_FUZZ=ON -DBDF_SANITIZE=address,undefined && cmake --build build && ./build/fuzz/doc_fuzz fuzz/corpus/doc -max_total_time=600` (targets: `object`, `inflate`, `manifest`, `doc`). Go: `cd go && go test -run '^$' -fuzz '^FuzzDoc$' -fuzztime 10m` (`FuzzObject`, `FuzzInflate`, `FuzzDoc`). The `fuzz` job of the CI workflow does all of it when dispatched by hand with a number of minutes. What a fuzzer finds is committed by hand to `fuzz/regress/<target>/` (replayed by `ctest`) or `go/testdata/fuzz/` (replayed by `go test`); `fuzz/corpus/` is the working corpus and stays local.
 
 ## License
 
-MIT, the same as bdf.
+MIT, the same as bdf. The vendored Brotli decoder under `third_party/brotli` is MIT as well (see its LICENSE and README).

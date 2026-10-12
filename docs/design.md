@@ -20,7 +20,7 @@ adapters  core の命令列をフレームワークのキャンバスに流す�
 
 core は形式だけを知り、描画を知らない。adapters は描画だけを知り、形式を知らない。raster は adapters の 1 つでもあるが、フレームワークに依存しない唯一の描き手なので、どの環境でも同じ絵を出す基準になる。
 
-core のうち今あるのは読みの部分で、libc 以外に依存しない。JSON の読み手と inflate を自前で持つのは、依存を増やさないためと、単一ヘッダに収めるためである（§6）。
+core のうち今あるのは読みの部分で、libc 以外に依存しない。JSON の読み手と inflate を自前で持つのは、依存を増やさないためと、単一ヘッダに収めるためである（§6）。例外は WOFF2 の Brotli で、google/brotli 1.1.0 のデコーダだけを `third_party/brotli` に vendoring した（MIT、無改変、出所と SHA-256 は同梱の README）。`BDF_WITH_BROTLI`（既定 ON）で入り、OFF のビルドは WOFF2 を `BDF_ERR_UNSUPPORTED` で断る。WOFF2 の復元そのものは Go の `font/woff2/decode.go` の移植で、glyf と loca の再構成（loca は長形式、`head.indexToLocFormat` を 1 に）、hmtx の再構成、タグ順の並べ替えと 4 バイト境界、チェックサムまで同じにしてあり、参照実装と同じバイト列を出す。Brotli の流れは、ディレクトリが言う大きさとその 1 バイト先までしか読まない（参照実装の `decompress` と同じで、短い流れと末尾の欠けた流れは拒否し、長い分は見ない）。
 
 ## 3. 参照実装との関係
 
@@ -47,7 +47,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 
 - **単体テスト**（`tests/`、ctest）: 参照実装の `bdf_test.go` と `malformed_test.go` の事例を写したもの。切り詰め、未知の opcode、巨大な個数、不正な参照、manifest の数値の範囲、Part の範囲、inflate の上限。
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
-- **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object を Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。
+- **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
 - **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc の 4 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`）。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。
 
@@ -63,7 +63,7 @@ cgo を選んで purego にしなかったのは、`go build -asan` が cgo に�
 - 実装は C11。配列の指示初期化子（`bdfi_op_table`）と `void *` の暗黙変換を使っているので、C++ の翻訳単位には実装を入れない（宣言だけ含め、実装は 1 つの .c に置く）。
 - CMake は Python があるとき `bdf_single_header` ターゲットで生成し、単体テストを単一ヘッダに対してもライブラリと同じ警告（`-Werror`）で回す。生成物は CI の成果物（`bdf-single-header`）にもなる。
 
-ラスタや WOFF2 のような第三者ライブラリに依存する層は単一ヘッダに入れない。
+第三者ライブラリ自体は単一ヘッダに入れない。WOFF2 の復元のコードは入っていて、Brotli は `BDF_HAVE_BROTLI` を定義して libbrotlidec（か `third_party/brotli`）を一緒にコンパイル・リンクすれば使え、定義しなければ `BDF_ERR_UNSUPPORTED` を返す。ラスタや画像コーデックも同じ扱いにする。
 
 ## 7. 適合テストの形式（bdf conformance）
 
@@ -106,7 +106,7 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 
 1. ~~コンテナと manifest（JSON）、Part の取得（single、split、コールバック）、deflate-raw、spec の上限。~~ 済み。
 2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI への組み込みは bdf の次のリリース後。
-3. WOFF2 → SFNT（Go の `font/woff2` と fontTools のテストベクタで固める）。
+3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
 4. テキスト run、リンク、テキスト索引の検索。
 5. 暗号化（Mbed TLS か platform の vtable）。
 6. ラスタライザの移植と、bdf の golden との比較。

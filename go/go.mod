@@ -7,4 +7,7 @@ require (
 	github.com/shibukawa/bdf v0.1.5
 )
 
-require golang.org/x/text v0.42.0 // indirect
+require (
+	github.com/andybalholm/brotli v1.2.5 // indirect
+	golang.org/x/text v0.42.0 // indirect
+)
