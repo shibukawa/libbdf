@@ -94,14 +94,13 @@ jobs:
     runs-on: macos-latest
     env:
       SKIA_URL: https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip
-      SKIA_SHA256: ""
+      SKIA_SHA256: 22663000967fc2c3f1a78190082228474955de02ffd13a352b39a48b204dac9a
     steps:
       - uses: actions/checkout@v7
       - name: Fetch a build of Skia
         run: |
           curl -fsSL -o "$RUNNER_TEMP/skia.zip" "$SKIA_URL"
-          shasum -a 256 "$RUNNER_TEMP/skia.zip"
-          if [ -n "$SKIA_SHA256" ]; then echo "$SKIA_SHA256  $RUNNER_TEMP/skia.zip" | shasum -a 256 -c -; fi
+          echo "$SKIA_SHA256  $RUNNER_TEMP/skia.zip" | shasum -a 256 -c -
           mkdir "$RUNNER_TEMP/skia"
           unzip -q "$RUNNER_TEMP/skia.zip" -d "$RUNNER_TEMP/skia"
           ls "$RUNNER_TEMP/skia" "$RUNNER_TEMP/skia/out"/*
