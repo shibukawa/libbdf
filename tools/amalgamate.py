@@ -31,6 +31,8 @@ ORDER = [
     "manifest.c",
     "doc.c",
     "woff2.c",
+    "text.c",
+    "index.c",
     "version.c",
 ]
 

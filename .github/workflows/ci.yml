@@ -110,14 +110,14 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBDF_BUILD_FUZZ=ON -DBDF_SANITIZE=address,undefined -DBDF_BUILD_TESTS=OFF
           cmake --build build
           mkdir -p fuzz/findings
-          for t in object inflate manifest doc woff2; do
+          for t in object inflate manifest doc woff2 text; do
             mkdir -p "fuzz/corpus/$t"
             "./build/fuzz/${t}_fuzz" "fuzz/corpus/$t" -max_total_time=$(( ${{ github.event.inputs.fuzz-minutes }} * 60 )) -artifact_prefix="fuzz/findings/$t-"
           done
       - name: go test -fuzz
         working-directory: go
         run: |
-          for t in FuzzObject FuzzInflate FuzzDoc FuzzWOFF2; do
+          for t in FuzzObject FuzzInflate FuzzDoc FuzzWOFF2 FuzzText FuzzIndexPart; do
             go test -run '^$' -fuzz "^$t\$" -fuzztime "${{ github.event.inputs.fuzz-minutes }}m" ./...
           done
       - uses: actions/upload-artifact@v7

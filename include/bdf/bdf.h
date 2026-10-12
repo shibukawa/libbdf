@@ -44,9 +44,9 @@ extern "C" {
 #endif
 
 #define BDF_VERSION_MAJOR  0
-#define BDF_VERSION_MINOR  2
+#define BDF_VERSION_MINOR  4
 #define BDF_VERSION_PATCH  0
-#define BDF_VERSION_STRING "0.2.0"
+#define BDF_VERSION_STRING "0.4.0"
 
 /* The wire format version and the instruction set (opset) this library reads. */
 #define BDF_FORMAT_VERSION 1
@@ -632,6 +632,215 @@ BDF_API void bdf_paths_free(bdf_paths *paths);
 BDF_API size_t bdf_paths_count(const bdf_paths *paths);
 /* The path at i; never external. */
 BDF_API bdf_status bdf_paths_get(const bdf_paths *paths, size_t i, bdf_path *out);
+
+/* ---- Text (spec §7.4, §7.7, §7.8) --------------------------------------- */
+
+/* MARK kinds (spec §7.8). */
+enum {
+  BDF_MARK_PARAGRAPH = 0,
+  BDF_MARK_LINE = 1,
+  BDF_MARK_CELL = 2,
+  BDF_MARK_BOX = 3,
+  BDF_MARK_ALT_TEXT = 4,
+  BDF_MARK_WRAP = 5,
+  BDF_MARK_HEADING = 6,
+  BDF_MARK_LIST = 7,
+  BDF_MARK_LIST_ITEM = 8,
+  BDF_MARK_TABLE = 9,
+  BDF_MARK_FIGURE = 10,
+  BDF_MARK_END = 11,
+  BDF_MARK_LANG = 12
+};
+
+/* Separators between consecutive runs (spec §7.9): nothing, a space, a
+ * paragraph break. */
+enum { BDF_SEP_NONE = 0, BDF_SEP_SPACE = 1, BDF_SEP_BREAK = 2 };
+
+/* Limits of walking the objects an object draws with USE (spec §7.6): how
+ * deep, and how many instructions are read from objects that were walked
+ * before. A walk past either fails. A build of the library may define the
+ * second lower. */
+#define BDF_MAX_USE_DEPTH 64
+#ifndef BDF_MAX_REUSED_INSTRUCTIONS
+#define BDF_MAX_REUSED_INSTRUCTIONS (1 << 27)
+#endif
+
+/*
+ * bdf_text holds the text runs and the links of an object and the objects it
+ * draws, in walk order: what a text layer, a selection or a search needs.
+ * The runs are those of the reference implementation's ExtractText, with
+ * the same order, ordinals and separators.
+ */
+typedef struct bdf_text bdf_text;
+
+/* bdf_resolve_fn returns the decoded object of a part name, or NULL when
+ * there is none (the child is skipped). */
+typedef const bdf_object *(*bdf_resolve_fn)(void *ctx, const uint8_t hash[16]);
+
+/*
+ * bdf_text_extract walks an object. resolve gives the objects it draws with
+ * USE (NULL: none are walked). The strings of the text point into the
+ * objects, which must outlive it.
+ */
+BDF_API bdf_status bdf_text_extract(const bdf_object *obj, bdf_resolve_fn resolve, void *ctx,
+                                    bdf_text **out, bdf_error *err);
+BDF_API void bdf_text_free(bdf_text *text);
+
+typedef struct bdf_text_run {
+  const char *text; /* UTF-8, NUL-terminated as a convenience */
+  size_t text_len;
+  float x, y;      /* the anchor (the x, y of FILL_TEXT) after the transform */
+  float advance;   /* the expected width, in the units of the drawing; 0 when unknown */
+  float size;      /* the font size */
+  float matrix[6]; /* the transform at the time of drawing: a b c d e f */
+  int has_font;
+  bdf_font font;    /* when has_font */
+  uint8_t align;    /* BDF_ALIGN_* */
+  uint8_t sep;      /* BDF_SEP_*: the separator from the run before */
+  int alt_text;     /* the text of an ALT_TEXT mark: nothing was drawn with it */
+  uint32_t ordinal; /* the position in the walk; matches the text index part */
+} bdf_text_run;
+
+BDF_API size_t bdf_text_run_count(const bdf_text *text);
+BDF_API bdf_status bdf_text_run_at(const bdf_text *text, size_t i, bdf_text_run *out);
+
+/* A LINK area: the bounding box of its rectangle after the transform. */
+typedef struct bdf_text_link {
+  float x, y, w, h;
+  const char *url; /* as written; see bdf_link_parse */
+  size_t url_len;
+  int64_t after; /* the index of the last run before the LINK, -1 before the first */
+} bdf_text_link;
+
+BDF_API size_t bdf_text_link_count(const bdf_text *text);
+BDF_API bdf_status bdf_text_link_at(const bdf_text *text, size_t i, bdf_text_link *out);
+
+/* What a LINK url may be (spec §7.7); a reader makes no link of anything else. */
+typedef enum bdf_link_kind {
+  BDF_LINK_NONE = 0, /* not a link a reader follows */
+  BDF_LINK_URL = 1,  /* an http, https or mailto URL */
+  BDF_LINK_PAGE = 2, /* "#page=N": a page of the same view */
+  BDF_LINK_VIEW = 3  /* "#view=ID" or "#view=ID&page=N": another view */
+} bdf_link_kind;
+
+typedef struct bdf_link_target {
+  bdf_link_kind kind;
+  int64_t page;     /* PAGE, and VIEW with a page: from 1; 0 when a VIEW link names none */
+  const char *view; /* VIEW: the id as the url writes it (URL-encoded), inside url */
+  size_t view_len;
+} bdf_link_target;
+
+/* bdf_link_parse classifies a LINK url; out may be NULL. */
+BDF_API bdf_link_kind bdf_link_parse(const char *url, size_t len, bdf_link_target *out);
+/* bdf_link_view_id decodes the id of a VIEW link (percent-encoding, and "+"
+ * as a space) into buf: its length, or -1 when it does not decode or does
+ * not fit in cap bytes. No NUL is written. */
+BDF_API int64_t bdf_link_view_id(const bdf_link_target *target, char *buf, size_t cap);
+/* bdf_doc_view_find is the index of the view with an id, or -1. */
+BDF_API int64_t bdf_doc_view_find(const bdf_doc *doc, const char *id, size_t len);
+
+/* bdf_doc_object reads and decodes an object part; free it with bdf_object_free. */
+BDF_API bdf_status bdf_doc_object(const bdf_doc *doc, const uint8_t hash[16], bdf_object **out,
+                                  bdf_error *err);
+/*
+ * bdf_doc_text is the text of a top-level object of a document (the object
+ * of a page's layer, or of a tile), with the objects it draws read from the
+ * document. The text owns those objects.
+ */
+BDF_API bdf_status bdf_doc_text(const bdf_doc *doc, const uint8_t hash[16], bdf_text **out,
+                                bdf_error *err);
+
+/* ---- Text index (spec §7.9) --------------------------------------------- */
+
+/* The runs of a view in reading order: a text index part, or the same made
+ * from the objects of a view. */
+typedef struct bdf_text_index bdf_text_index;
+
+typedef struct bdf_index_run {
+  uint32_t a, b;    /* page and layer; in a sheet, tile x and y */
+  uint32_t ordinal; /* bdf_text_run.ordinal in that object */
+  uint8_t sep;      /* BDF_SEP_* */
+  const char *text;
+  size_t text_len;
+} bdf_index_run;
+
+BDF_API bdf_status bdf_text_index_decode(const uint8_t *data, size_t len, bdf_text_index **out,
+                                         bdf_error *err);
+BDF_API void bdf_text_index_free(bdf_text_index *index);
+BDF_API size_t bdf_text_index_count(const bdf_text_index *index);
+BDF_API bdf_status bdf_text_index_run(const bdf_text_index *index, size_t i, bdf_index_run *out);
+/* bdf_text_index_plain joins the runs into plain text (a space or a line
+ * break where a run's separator says so), NUL-terminated, in a buffer the
+ * caller frees with bdf_free. */
+BDF_API bdf_status bdf_text_index_plain(const bdf_text_index *index, char **out, size_t *out_len,
+                                        bdf_error *err);
+
+/*
+ * bdf_doc_view_text is the text of a view: its text index part when it has
+ * one and extract is 0, and otherwise extracted from its objects (the
+ * layers of its pages; in a sheet its inline tiles, each keeping the runs
+ * anchored in it). The limits of BDF_MAX_* count across the view.
+ */
+BDF_API bdf_status bdf_doc_view_text(const bdf_doc *doc, size_t view, int extract,
+                                     bdf_text_index **out, bdf_error *err);
+
+/*
+ * The text of a document for a search index outside it, page by page: that
+ * of bdf_doc_view_text for each view, without the pages that have none, and
+ * without a scroll view when the document also has a flow view (the same
+ * text laid out both ways). Normalisation (NFKC, case, kana) is left to the
+ * search engine. A locked document has no views, and so no text.
+ */
+typedef struct bdf_search_text bdf_search_text;
+
+typedef struct bdf_search_view {
+  const char *id;
+  size_t id_len;
+  const char *kind;
+  size_t kind_len;
+  const char *title;
+  size_t title_len;
+  size_t npages;
+} bdf_search_view;
+
+typedef struct bdf_search_page {
+  int64_t page; /* from 1, for links like #page=N; 0 for a whole sheet */
+  const char *text;
+  size_t text_len;
+} bdf_search_page;
+
+BDF_API bdf_status bdf_doc_search_text(const bdf_doc *doc, bdf_search_text **out, bdf_error *err);
+BDF_API void bdf_search_text_free(bdf_search_text *st);
+BDF_API size_t bdf_search_text_view_count(const bdf_search_text *st);
+BDF_API bdf_status bdf_search_text_view(const bdf_search_text *st, size_t i, bdf_search_view *out);
+BDF_API bdf_status bdf_search_text_page(const bdf_search_text *st, size_t view, size_t i,
+                                        bdf_search_page *out);
+
+/* ---- Cue index (spec §4.4) ---------------------------------------------- */
+
+typedef struct bdf_cues bdf_cues;
+
+/* A rectangle of a page the playing position moves through: a system of a
+ * score, or a line of lyrics. */
+typedef struct bdf_cue_system {
+  uint32_t page; /* from 0 */
+  float x, y, w, h;
+} bdf_cue_system;
+
+/* At tick (of the Standard MIDI File, or milliseconds of an audio file) the
+ * playing position is at x on a system. */
+typedef struct bdf_cue {
+  uint32_t tick;
+  uint32_t system;
+  float x;
+} bdf_cue;
+
+BDF_API bdf_status bdf_cues_decode(const uint8_t *data, size_t len, bdf_cues **out, bdf_error *err);
+BDF_API void bdf_cues_free(bdf_cues *cues);
+BDF_API size_t bdf_cues_system_count(const bdf_cues *cues);
+BDF_API bdf_status bdf_cues_system(const bdf_cues *cues, size_t i, bdf_cue_system *out);
+BDF_API size_t bdf_cues_count(const bdf_cues *cues);
+BDF_API bdf_status bdf_cues_cue(const bdf_cues *cues, size_t i, bdf_cue *out);
 
 #ifdef __cplusplus
 }

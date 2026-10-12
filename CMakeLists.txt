@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.3.0
+  VERSION 0.4.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -34,6 +34,8 @@ set(BDF_SOURCES
   src/manifest.c
   src/doc.c
   src/woff2.c
+  src/text.c
+  src/index.c
   src/version.c)
 
 if(BDF_WITH_BROTLI)
@@ -108,6 +110,9 @@ endif()
 if(BDF_BUILD_FUZZ)
   # The library itself carries the coverage instrumentation the fuzzer steers by.
   target_compile_options(bdf PRIVATE -fsanitize=fuzzer-no-link)
+  # Objects that draw each other again and again are stopped by a limit that
+  # takes seconds to reach; a fuzzer learns as much from a lower one.
+  target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_INSTRUCTIONS=65536)
   add_subdirectory(fuzz)
 endif()
 

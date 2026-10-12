@@ -510,39 +510,29 @@ const uint8_t *bdf_object_ops(const bdf_object *o, size_t *len) {
 
 /* ---- Instructions ------------------------------------------------------- */
 
-#define BDFI_MAX_ARGS 9 /* IMAGE_SUB has the most operands */
+void bdfi_instr_init(bdf_instr *it, const bdf_object *o) {
+  memset(it, 0, sizeof *it);
+  it->obj = o;
+  bdfi_rd_init(&it->r, o->ops, o->nops);
+}
 
-typedef struct bdfi_arg {
-  bdf_arg_kind kind;
-  float f;
-  uint64_t u;
-  const void *p;
-  size_t n;
-} bdfi_arg;
-
-struct bdf_instr {
-  const bdf_object *obj;
-  bdfi_reader r;
-  uint8_t op;
-  size_t offset;
-  size_t nargs;
-  bdfi_arg args[BDFI_MAX_ARGS];
-  float *f32s; /* DASH segments */
-  size_t f32cap;
-  bdf_glyph *glyphs; /* FILL_PATH_RUN */
-  size_t glyphcap;
-};
+void bdfi_instr_clear(bdf_instr *it) {
+  free(it->f32s);
+  free(it->glyphs);
+  it->f32s = NULL;
+  it->glyphs = NULL;
+  it->f32cap = it->glyphcap = 0;
+}
 
 bdf_instr *bdf_instr_new(const bdf_object *o) {
   if (!o) {
     return NULL;
   }
-  bdf_instr *it = calloc(1, sizeof *it);
+  bdf_instr *it = malloc(sizeof *it);
   if (!it) {
     return NULL;
   }
-  it->obj = o;
-  bdfi_rd_init(&it->r, o->ops, o->nops);
+  bdfi_instr_init(it, o);
   return it;
 }
 
@@ -550,8 +540,7 @@ void bdf_instr_free(bdf_instr *it) {
   if (!it) {
     return;
   }
-  free(it->f32s);
-  free(it->glyphs);
+  bdfi_instr_clear(it);
   free(it);
 }
 

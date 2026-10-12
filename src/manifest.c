@@ -275,6 +275,64 @@ static int bdfi_mp_page(bdfi_mp *p, const bdfi_json_node *pg, bdfi_page *out) {
   return 0;
 }
 
+/* The tiles of a sheet are a JSON object, and of members with the same name
+ * the last counts (the reference reads them into a map): the earlier ones are
+ * dropped, and the rest keep their order. */
+typedef struct bdfi_tile_ref {
+  const char *key;
+  size_t len;
+  size_t index;
+} bdfi_tile_ref;
+
+static int bdfi_tile_ref_cmp(const void *a, const void *b) {
+  const bdfi_tile_ref *x = a, *y = b;
+  size_t n = x->len < y->len ? x->len : y->len;
+  int c = n ? memcmp(x->key, y->key, n) : 0;
+  if (c != 0) {
+    return c;
+  }
+  if (x->len != y->len) {
+    return x->len < y->len ? -1 : 1;
+  }
+  return x->index < y->index ? -1 : x->index > y->index;
+}
+
+static int bdfi_mp_dedupe_tiles(bdfi_mp *p, bdfi_view *v) {
+  size_t n = v->ntiles;
+  if (n < 2) {
+    return 0;
+  }
+  bdfi_tile_ref *refs = bdfi_malloc_array(n, sizeof *refs);
+  uint8_t *drop = calloc(n, 1);
+  if (!refs || !drop) {
+    free(refs);
+    free(drop);
+    return bdfi_mp_nomem(p);
+  }
+  for (size_t i = 0; i < n; i++) {
+    refs[i].key = v->tiles[i].key.p;
+    refs[i].len = v->tiles[i].key.n;
+    refs[i].index = i;
+  }
+  qsort(refs, n, sizeof *refs, bdfi_tile_ref_cmp);
+  for (size_t i = 0; i + 1 < n; i++) {
+    if (refs[i].len == refs[i + 1].len &&
+        (refs[i].len == 0 || memcmp(refs[i].key, refs[i + 1].key, refs[i].len) == 0)) {
+      drop[refs[i].index] = 1; /* a later member has the name */
+    }
+  }
+  size_t k = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (!drop[i]) {
+      v->tiles[k++] = v->tiles[i];
+    }
+  }
+  v->ntiles = k;
+  free(refs);
+  free(drop);
+  return 0;
+}
+
 static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
   if (bdfi_mp_str(p, v, "id", &out->id) < 0 || bdfi_mp_str(p, v, "kind", &out->kind) < 0 ||
       bdfi_mp_str(p, v, "title", &out->title) < 0 ||
@@ -361,6 +419,9 @@ static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
       }
     }
     out->ntiles = tiles->count;
+    if (bdfi_mp_dedupe_tiles(p, out) < 0) {
+      return -1;
+    }
   }
   if (bdfi_mp_str(p, v, "tilesRef", &out->tiles_ref) < 0) {
     return -1;

@@ -135,6 +135,174 @@ static inline int manifest_opens(const char *manifest, bdf_error *err) {
   return st == BDF_OK;
 }
 
+/* ---- An object builder --------------------------------------------------- */
+
+/* ob assembles an Object part: its tables and its op stream. */
+typedef struct ob {
+  wr strings, paths, fonts, objects, ops;
+  size_t nstrings, npaths, nfonts, nobjects;
+  float bbox[4];
+} ob;
+
+static inline size_t ob_str(ob *o, const char *s) {
+  w_str(&o->strings, s);
+  return o->nstrings++;
+}
+
+static inline size_t ob_font(ob *o, const char *family) {
+  w_u8(&o->fonts, BDF_FONT_SYSTEM);
+  w_str(&o->fonts, family);
+  w_u16(&o->fonts, 400);
+  w_u8(&o->fonts, BDF_STYLE_NORMAL);
+  return o->nfonts++;
+}
+
+/* ob_rect_path adds an inline path of one unit square. */
+static inline size_t ob_rect_path(ob *o) {
+  w_u8(&o->paths, 0);
+  w_varuint(&o->paths, 1);
+  w_u8(&o->paths, BDF_VERB_RECT);
+  w_f32(&o->paths, 0);
+  w_f32(&o->paths, 0);
+  w_f32(&o->paths, 1);
+  w_f32(&o->paths, 1);
+  return o->npaths++;
+}
+
+/* ob_child adds a child object whose part name is id as four bytes and zeros. */
+static inline size_t ob_child(ob *o, uint32_t id) {
+  uint8_t h[16] = {0};
+  h[0] = (uint8_t)(id >> 24);
+  h[1] = (uint8_t)(id >> 16);
+  h[2] = (uint8_t)(id >> 8);
+  h[3] = (uint8_t)id;
+  w_bytes(&o->objects, h, sizeof h);
+  return o->nobjects++;
+}
+
+static inline void ob_op(ob *o, uint8_t op) { w_u8(&o->ops, op); }
+
+static inline void ob_set_font(ob *o, size_t font, float size) {
+  ob_op(o, BDF_OP_FONT);
+  w_varuint(&o->ops, font);
+  w_f32(&o->ops, size);
+}
+
+static inline void ob_align(ob *o, uint8_t align) {
+  ob_op(o, BDF_OP_TEXT_STYLE);
+  w_u8(&o->ops, align);
+  w_u8(&o->ops, 0);
+  w_u8(&o->ops, 0);
+  w_f32(&o->ops, 0);
+}
+
+static inline void ob_mark(ob *o, uint8_t kind, const char *payload) {
+  size_t s = ob_str(o, payload);
+  ob_op(o, BDF_OP_MARK);
+  w_u8(&o->ops, kind);
+  w_varuint(&o->ops, s);
+}
+
+static inline void ob_text(ob *o, const char *text, float x, float y, float advance) {
+  size_t s = ob_str(o, text);
+  ob_op(o, BDF_OP_FILL_TEXT);
+  w_varuint(&o->ops, s);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, advance);
+}
+
+static inline void ob_path_at(ob *o, size_t path, float x, float y) {
+  ob_op(o, BDF_OP_FILL_PATH_AT);
+  w_varuint(&o->ops, path);
+  w_u8(&o->ops, BDF_FILL_NONZERO);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+}
+
+static inline void ob_translate(ob *o, float x, float y) {
+  ob_op(o, BDF_OP_TRANSLATE);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+}
+
+static inline void ob_scale(ob *o, float x, float y) {
+  ob_op(o, BDF_OP_SCALE);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+}
+
+static inline void ob_use(ob *o, size_t child) {
+  ob_op(o, BDF_OP_USE);
+  w_varuint(&o->ops, child);
+}
+
+static inline void ob_use_at(ob *o, size_t child, float x, float y) {
+  ob_op(o, BDF_OP_USE_AT);
+  w_varuint(&o->ops, child);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+}
+
+static inline void ob_link(ob *o, float x, float y, float w, float h, const char *url) {
+  size_t s = ob_str(o, url);
+  ob_op(o, BDF_OP_LINK);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, w);
+  w_f32(&o->ops, h);
+  w_varuint(&o->ops, s);
+}
+
+static inline void ob_mask_begin(ob *o) {
+  ob_op(o, BDF_OP_MASK_BEGIN);
+  w_u8(&o->ops, BDF_MASK_ALPHA);
+  w_u32(&o->ops, 0);
+  w_varuint(&o->ops, 0);
+}
+
+/* ob_encode writes the part and frees the builder. */
+static inline wr ob_encode(ob *o) {
+  wr w = {0};
+  w_bytes(&w, "BOBJ", 4);
+  w_u16(&w, BDF_OPSET_VERSION);
+  w_u16(&w, 0);
+  for (int i = 0; i < 4; i++) {
+    w_f32(&w, o->bbox[i]);
+  }
+  w_varuint(&w, o->nstrings);
+  w_bytes(&w, o->strings.b, o->strings.n);
+  w_varuint(&w, o->npaths);
+  w_bytes(&w, o->paths.b, o->paths.n);
+  w_varuint(&w, 0); /* paints */
+  w_varuint(&w, o->nfonts);
+  w_bytes(&w, o->fonts.b, o->fonts.n);
+  w_varuint(&w, 0); /* images */
+  w_varuint(&w, o->nobjects);
+  w_bytes(&w, o->objects.b, o->objects.n);
+  w_varuint(&w, o->ops.n);
+  w_bytes(&w, o->ops.b, o->ops.n);
+  free(o->strings.b);
+  free(o->paths.b);
+  free(o->fonts.b);
+  free(o->objects.b);
+  free(o->ops.b);
+  memset(o, 0, sizeof *o);
+  return w;
+}
+
+/* ob_decode encodes and decodes: the object, or NULL. */
+static inline bdf_object *ob_decode(ob *o) {
+  wr w = ob_encode(o);
+  bdf_object *obj = NULL;
+  bdf_error err;
+  if (bdf_object_decode(w.b, w.n, &obj, &err) != BDF_OK) {
+    fprintf(stderr, "ob_decode: %s at %zu\n", err.message, err.offset);
+  }
+  free(w.b);
+  return obj;
+}
+
 static inline int finish(void) {
   if (failures) {
     fprintf(stderr, "%d checks failed\n", failures);

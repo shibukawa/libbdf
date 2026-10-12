@@ -74,6 +74,14 @@ BDF_INTERNAL void bdfi_error_from_reader(bdf_error *err, const bdfi_reader *r);
 /* bdfi_alloc_items allocates n zeroed items of size bytes, or sets *oom; n
  * may be 0, which returns NULL without an error. */
 BDF_INTERNAL void *bdfi_alloc_items(size_t n, size_t size, int *oom);
+/*
+ * Arrays of n items of size bytes: NULL when out of memory, and for more
+ * than PTRDIFF_MAX bytes, which no object can be. For n == 0 they return a
+ * pointer that can be freed. bdfi_calloc_array zeroes.
+ */
+BDF_INTERNAL void *bdfi_malloc_array(size_t n, size_t size);
+BDF_INTERNAL void *bdfi_calloc_array(size_t n, size_t size);
+BDF_INTERNAL void *bdfi_realloc_array(void *p, size_t n, size_t size);
 
 /* bdfi_arena hands out memory that is freed all at once. */
 typedef struct bdfi_arena_chunk bdfi_arena_chunk;
@@ -107,6 +115,92 @@ typedef struct bdfi_path_entry {
 BDF_INTERNAL int bdfi_decode_path(bdfi_reader *r, bdfi_path_entry *p);
 BDF_INTERNAL void bdfi_path_entry_clear(bdfi_path_entry *p);
 BDF_INTERNAL void bdfi_path_entry_view(const bdfi_path_entry *p, bdf_path *out);
+
+/* ---- The instruction iterator ------------------------------------------- */
+
+#define BDFI_MAX_ARGS 9 /* IMAGE_SUB has the most operands */
+
+typedef struct bdfi_arg {
+  bdf_arg_kind kind;
+  float f;
+  uint64_t u;
+  const void *p;
+  size_t n;
+} bdfi_arg;
+
+/* The iterator is defined here so that the library's own walks keep one on
+ * the stack (bdfi_instr_init, bdfi_instr_clear) instead of allocating one
+ * for every object they enter. */
+struct bdf_instr {
+  const bdf_object *obj;
+  bdfi_reader r;
+  uint8_t op;
+  size_t offset;
+  size_t nargs;
+  bdfi_arg args[BDFI_MAX_ARGS];
+  float *f32s; /* DASH segments */
+  size_t f32cap;
+  bdf_glyph *glyphs; /* FILL_PATH_RUN */
+  size_t glyphcap;
+};
+
+BDF_INTERNAL void bdfi_instr_init(bdf_instr *it, const bdf_object *obj);
+/* bdfi_instr_clear frees the buffers of an iterator that was initialised. */
+BDF_INTERNAL void bdfi_instr_clear(bdf_instr *it);
+
+/* ---- Text extraction ---------------------------------------------------- */
+
+/*
+ * A set of part names: a crit-bit tree, so that adding and finding a name
+ * takes at most 128 steps whatever names a document chooses (a hash table
+ * could be made to collide).
+ */
+typedef struct bdfi_cb_node {
+  uint32_t bit;     /* the bit the two sides differ in, from the most significant */
+  int32_t child[2]; /* a node, or ~index of a key when negative */
+} bdfi_cb_node;
+
+typedef struct bdfi_hash_set {
+  bdfi_cb_node *nodes;
+  size_t nnodes, cap_nodes;
+  uint8_t *keys; /* 16 bytes each */
+  size_t nkeys, cap_keys;
+  int32_t root;
+} bdfi_hash_set;
+
+/* bdfi_hash_set_add adds a name: 1 when it was there, 0 when it was added,
+ * -1 when out of memory. */
+BDF_INTERNAL int bdfi_hash_set_add(bdfi_hash_set *s, const uint8_t key[16]);
+BDF_INTERNAL void bdfi_hash_set_free(bdfi_hash_set *s);
+
+/*
+ * bdfi_use_limits counts a walk of objects against the limits (spec §7.6):
+ * which children were walked before, the instructions read from those, and
+ * the limit that was passed, after which every walk with them fails. One is
+ * shared by the top-level objects of a view.
+ */
+typedef struct bdfi_use_limits {
+  bdfi_hash_set seen;
+  uint64_t reused;
+  uint64_t max_reused; /* 0: BDF_MAX_REUSED_INSTRUCTIONS */
+  const char *err;
+} bdfi_use_limits;
+
+BDF_INTERNAL void bdfi_use_limits_init(bdfi_use_limits *l);
+BDF_INTERNAL void bdfi_use_limits_free(bdfi_use_limits *l);
+
+/* bdfi_text_extract is bdf_text_extract with the limits of the caller, and
+ * with or without the links. */
+BDF_INTERNAL bdf_status bdfi_text_extract(const bdf_object *obj, bdf_resolve_fn resolve, void *ctx,
+                                          bdfi_use_limits *limits, int links, bdf_text **out,
+                                          bdf_error *err);
+/* bdfi_text_adopt makes a text the owner of what its strings point into;
+ * bdf_text_free frees it with free_owner. */
+BDF_INTERNAL void bdfi_text_adopt(bdf_text *text, void *owner, void (*free_owner)(void *));
+
+/* bdfi_doc_part_index is the index of a part in the manifest's parts table
+ * (the entry that counts for the name), or -1. */
+BDF_INTERNAL int64_t bdfi_doc_part_index(const bdf_doc *doc, const uint8_t hash[16]);
 
 /* ---- JSON --------------------------------------------------------------- */
 

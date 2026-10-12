@@ -164,6 +164,34 @@ void *bdfi_alloc_items(size_t n, size_t size, int *oom) {
   return p;
 }
 
+/* bdfi_array_bytes is n × size, or 0 with *ok cleared when that is more
+ * than an object can be. */
+static size_t bdfi_array_bytes(size_t n, size_t size, int *ok) {
+  if (size != 0 && n > (size_t)PTRDIFF_MAX / size) {
+    *ok = 0;
+    return 0;
+  }
+  return n * size;
+}
+
+void *bdfi_malloc_array(size_t n, size_t size) {
+  int ok = 1;
+  size_t bytes = bdfi_array_bytes(n, size, &ok);
+  return ok ? malloc(bytes ? bytes : 1) : NULL;
+}
+
+void *bdfi_calloc_array(size_t n, size_t size) {
+  int ok = 1;
+  size_t bytes = bdfi_array_bytes(n, size, &ok);
+  return ok ? calloc(bytes ? bytes : 1, 1) : NULL;
+}
+
+void *bdfi_realloc_array(void *p, size_t n, size_t size) {
+  int ok = 1;
+  size_t bytes = bdfi_array_bytes(n, size, &ok);
+  return ok ? realloc(p, bytes ? bytes : 1) : NULL;
+}
+
 struct bdfi_arena_chunk {
   bdfi_arena_chunk *next;
   size_t used, cap;
