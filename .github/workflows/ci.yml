@@ -81,6 +81,8 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON ${{ matrix.flags }}
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
+      - name: How far from the rasterizer
+        run: ./build/adapters/compare_${{ matrix.name }}
       - name: Check the installed package
         run: |
           cmake --install build --prefix "${{ runner.temp }}/prefix"
@@ -107,6 +109,8 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_SKIA=ON -DBDF_SKIA_DIR="$RUNNER_TEMP/skia"
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
+      - name: How far from the rasterizer
+        run: ./build/adapters/compare_skia
 
   # The ways the library reaches other builds (packaging/README.md): a
   # consumer built through each of them.
@@ -244,7 +248,8 @@ jobs:
           cache-dependency-path: go/go.sum
       - run: go vet ./...
       - run: go test ./...
-      - run: go test -asan ./...
+      # (with -short: a part of the random cases, at a tenth of the speed)
+      - run: go test -asan -short -timeout 30m ./...
 
   # The conformance suite of bdf (its package conformance, `bdf conformance`):
   # written by the version of bdf the harness is pinned to (go/go.mod), from

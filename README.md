@@ -2,7 +2,7 @@
 
 A C reader for [BDF](https://github.com/shibukawa/bdf) (Browser-specific Document Format) documents, for native applications: a core that owns the format, a software rasterizer, and thin adapters that draw through Skia, CoreGraphics, QPainter and cairo.
 
-What exists today is the core's reading side, the rasterizer, and the first two adapters:
+What exists today is the core's reading side, the rasterizer, and the adapters:
 
 - `include/bdf/bdf.h` — the public C ABI (opaque handles, length-tagged strings, nothing global; see the header's preamble for the rules)
 - the single-file and split containers, the manifest (its own JSON reader, the checks of the reference), parts with their deflate-raw decoder, the Object part decoder with its instruction iterator, and path collections — each ported from the reference implementation check for check, with no dependency beyond libc
@@ -13,10 +13,10 @@ What exists today is the core's reading side, the rasterizer, and the first two 
 - a renderer (`bdf_renderer_new`, `bdf_render_page`, `bdf_render_region`, `bdf_render_object`) that draws pages, strips of scroll views, regions of sheets with their gridlines, and objects into premultiplied RGBA images: paths with both fill rules, strokes with joins, caps and dashes, clips, gradients, every composite operation and blend mode, groups, soft masks and shadows, and images (PNG, JPEG, GIF, BMP and WebP image parts drawn whole, in part and as patterns, turned by their EXIF orientation), and text. It is the reference's `raster/imagebdf` ported operation for operation, with decoders that are ports of the ones the reference decodes with, and draws the same pixels to the byte, on every platform and compiler; SVG images are the next step and are left out with a warning for now
 - text drawn from the outlines of the fonts, with no FreeType or HarfBuzz: readers of TrueType and CFF outlines and of character maps, and the reference's layout (a glyph a character, a simple order for right-to-left runs, a line fitted to the width it had where it was written). The fonts a document carries are used as they are. For text that names its font (documents made from HTML, Markdown or EPUB, and characters an embedded font lacks) the application says which fonts there are: `bdf_fonts_new`, `bdf_fonts_add` (a font file in memory) or `bdf_fonts_add_file`, given to the renderer through `bdf_render_options.fonts`. libbdf does not look through the directories of the system; it finds families in that set as the reference finds them in a system's (the family asked for, one that stands in for it, the generic family, fallbacks for the characters a font lacks), and without a set such text is left out with a warning
 - drawing through another 2D library: `bdf_play_page` and `bdf_play_part` run a page as the rasterizer runs it and hand what it draws to the functions of a `bdf_canvas` (paths of lines and curves, decoded images, gradients and patterns, layers for groups, text as the outlines of its glyphs or as strings for a canvas that draws text itself, soft masks as images to multiply by). The renderer keeps the drawing state, so an adapter is a few hundred lines
-- adapters over it, each a header and a source file (`include/bdf/bdf_<name>.h`, `adapters/<name>/`): **cairo** (`bdf_cairo_draw_page`: an image, a PDF or SVG file, a GTK widget) and **Core Graphics** (`bdf_cg_draw_page`: a bitmap, a PDF, an `NSView` or `UIView`)
+- adapters over it, each a header and a source file (`include/bdf/bdf_<name>.h`, `adapters/<name>/`): **cairo** (`bdf_cairo_draw_page`: an image, a PDF or SVG file, a GTK widget), **Core Graphics** (`bdf_cg_draw_page`: a bitmap, a PDF, an `NSView` or `UIView`), **QPainter** (`bdf_qt_draw_page`: a `QImage`, a `QWidget`, a `QPdfWriter`; Qt 6 or 5.15) and **Skia** (`bdf_skia_draw_page` on an `SkCanvas`: what Chrome draws a canvas with, and through SkiaSharp the way to .NET). The last two are C++
 - unit tests, libFuzzer targets, a differential test harness in Go that runs every document, part, object, font and text of the reference's test documents through both readers, and a runner for the reference's conformance suite
 
-Planned, in order: SVG images in the rasterizer, the adapters for QPainter and Skia. [docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
+[docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
 
 ## Relation to bdf
 
@@ -47,10 +47,12 @@ CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). The rasterizer needs 
 | `BDF_CONFORMANCE_DIR` | empty | a suite written by `bdf conformance`, run by `ctest` |
 | `BDF_CAIRO` | OFF | build `bdf::cairo` (needs cairo, found with pkg-config) |
 | `BDF_COREGRAPHICS` | OFF | build `bdf::coregraphics` (Apple platforms) |
+| `BDF_QT` | OFF | build `bdf::qt` (C++; Qt 6, or Qt 5.15, QtGui) |
+| `BDF_SKIA` | OFF | build `bdf::skia` (C++). Skia has no package: `BDF_SKIA_DIR` is its root (`include/`, and its library under `out/`, or `BDF_SKIA_LIBRARY`), `BDF_SKIA_LINK` what that library is linked with |
 
 Some limits can be lowered when compiling the library (`-DBDF_MAX_KDF_ITERATIONS=...`, `-DBDF_MAX_REUSED_INSTRUCTIONS=...`, `-DBDF_MAX_DECODE_PIXELS=...`, `-DBDF_MAX_PICTURE_PIXELS=...`): the iterations of the key derivation an encrypted document may ask for (ten million, the format's limit: seconds on a desktop, far more on a small processor), the instructions read again from objects drawn many times, the pixels an image is decoded with (a hundred million, at four bytes each), and the pixels of the images a renderer keeps decoded.
 
-Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg-config bdf`, or with `FetchContent` on this repository. An adapter that was built is `bdf::cairo` or `bdf::coregraphics` there (and `pkg-config bdf-cairo`); or take its two files into a build of your own, beside the library or the single header.
+Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg-config bdf`, or with `FetchContent` on this repository. An adapter that was built is `bdf::cairo`, `bdf::coregraphics`, `bdf::qt` or `bdf::skia` there (and `pkg-config bdf-cairo`); or take its two files into a build of your own, beside the library or the single header.
 
 ### Packages
 
