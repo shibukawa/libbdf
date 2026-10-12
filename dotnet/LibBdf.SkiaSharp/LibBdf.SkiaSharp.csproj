@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LibBdf.Skia</RootNamespace>
+    <PackageId>LibBdf.SkiaSharp</PackageId>
+    <Description>BDF documents drawn on a SkiaSharp canvas (SKCanvas): for .NET MAUI, Avalonia, Uno and anything else SkiaSharp draws on.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../LibBdf/LibBdf.csproj" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+  </ItemGroup>
+</Project>

@@ -19,3 +19,4 @@ leak-*
 timeout-*
 /.build/
 /.swiftpm/
+/dotnet/LibBdf/runtimes/

@@ -112,12 +112,12 @@ jobs:
   # consumer built through each of them.
   packaging:
     runs-on: ubuntu-latest
-    env:
-      PREFIX: ${{ runner.temp }}/prefix
     steps:
       - uses: actions/checkout@v7
       - name: Install the library
         run: |
+          echo "PREFIX=$RUNNER_TEMP/prefix" >> "$GITHUB_ENV"
+          PREFIX=$RUNNER_TEMP/prefix
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_BUILD_TESTS=OFF
           cmake --build build
           cmake --install build --prefix "$PREFIX"
@@ -180,6 +180,26 @@ jobs:
           cmake -S packaging/consumer -B "$RUNNER_TEMP/consumer" -DCMAKE_PREFIX_PATH="$tree"
           cmake --build "$RUNNER_TEMP/consumer" --config Release
           ctest --test-dir "$RUNNER_TEMP/consumer" -C Release --output-on-failure
+
+  # libbdf for .NET (dotnet/): the bindings and the SkiaSharp adapter built and
+  # tested against the shared library, and the NuGet packages packed.
+  packaging-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The shared library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBDF_BUILD_TESTS=OFF
+          cmake --build build
+      - name: Test
+        run: LD_LIBRARY_PATH="$PWD/build" dotnet test dotnet/LibBdf.Tests -c Release
+      - name: Pack
+        run: |
+          mkdir -p dotnet/LibBdf/runtimes/linux-x64/native
+          cp -L build/libbdf.so dotnet/LibBdf/runtimes/linux-x64/native/libbdf.so
+          dotnet pack dotnet/LibBdf -c Release -o "$RUNNER_TEMP/nupkg"
+          dotnet pack dotnet/LibBdf.SkiaSharp -c Release -o "$RUNNER_TEMP/nupkg"
+          for p in "$RUNNER_TEMP"/nupkg/*.nupkg; do unzip -l "$p"; done
 
   # The Swift package and the xcframework.
   packaging-apple:
