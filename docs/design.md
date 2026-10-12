@@ -93,24 +93,34 @@ bdf の `conformance` パッケージが、入力と「参照実装がそれを�
 
 libbdf 側は `tests/conformance.c` が suite を読んで同じ検査をする。suite は bdf の CI の成果物（`bdf-conformance`）とリリースの添付（`bdf-conformance-<tag>.tar.gz`）として配られる。libbdf の CI でこれを回すのは、その添付を持つ bdf の版に `go/go.mod` を上げてからにする。
 
-## 8. 配り方（計画）
+## 8. 配り方
 
-ソースは CMake ベースのこのリポジトリ 1 つで、配る先ごとに経路を変える。
+ソースは CMake ベースのこのリポジトリ 1 つで、配る先ごとに経路を変える。どれもリポジトリの中にあり、CI が経路ごとに利用側のプログラム（`packaging/consumer/main.c`）をビルドして確かめる。
 
-| 相手 | 経路 |
-|---|---|
-| C/C++ 一般 | 単一ヘッダ `bdf.h`（コア層） |
-| Qt、C++ 一般 | `find_package(bdf)`、`FetchContent`、vcpkg と Conan のポート |
-| GTK | pkg-config（`bdf.pc`）、Meson の wrap |
-| .NET MAUI | NuGet（`runtimes/<rid>/native/` にバイナリ、P/Invoke の managed アセンブリ、SkiaSharp 上のアダプタ） |
-| Cocoa、Swift | `swift-bdf` リポジトリの Swift Package（xcframework の binaryTarget） |
+| 相手 | 経路 | 置き場所 |
+|---|---|---|
+| C/C++ 一般 | 単一ヘッダ `bdf.h` | リリースのアセット。`bdf_single_header` ターゲット |
+| CMake（Qt など） | `find_package(bdf)`、`bdf::bdf` と `bdf::<アダプタ>`、`FetchContent` | `cmake --install` |
+| pkg-config（GTK） | `bdf.pc`、`bdf-cairo.pc`（プレフィックスは置かれた場所から相対で求めるので、インストール先を移せる） | `cmake --install` |
+| Meson | `packaging/meson/bdf.wrap`（CMake のビルドをサブプロジェクトにする） | `subprojects/` にコピー |
+| Conan 2 | ルートの `conanfile.py` | `conan create .` |
+| vcpkg | `packaging/vcpkg/bdf`（オーバーレイ ポート） | `--overlay-ports` |
+| Swift、Xcode | ルートの `Package.swift`: C のソースをそのままビルドする `CBDF`、Core Graphics アダプタの `CBDFCoreGraphics`、その上の薄い Swift の層 `BDF` | リポジトリをパッケージ依存に足す |
+| Xcode（バイナリ） | `bdf.xcframework`（macOS、iOS、iOS シミュレータ） | `packaging/xcframework.sh`、リリースのアセット |
+| .NET（MAUI、SkiaSharp） | NuGet パッケージ `LibBdf`（P/Invoke と `runtimes/<rid>/native/` の共有ライブラリ）、`LibBdf.SkiaSharp`（`SKCanvas` に描くアダプタ） | `dotnet/`、リリースのワークフローが pack する |
 
-ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラが違っても壊れないことを CI の MSVC と clang の両方のビルドで確かめる。小さい依存（Brotli のデコーダ、plutosvg）は vendoring して既定ビルドを自己完結にし、大きい依存（FreeType、画像コーデック）は `find_package` で探してなければ `FetchContent` に落ちる、という二段構えにする。
+**当初の計画から変えたところ**。Swift は別リポジトリ `swift-bdf` に xcframework の binaryTarget を置く計画だったが、このリポジトリの `Package.swift` がソースからビルドする形にした。C のソースだけで依存がないので SwiftPM がそのまま扱え、リポジトリもホストするバイナリも増えない。xcframework とそのチェックサムはリリースのアセットに入るので、binaryTarget が要るようになったらそこから作れる。
+
+**.NET のアダプタは C# で書いた**。SkiaSharp の上では、C++ の Skia アダプタ（`adapters/skia`）をネイティブに同梱するより、コアのプレイヤー（§16）のコールバックを C# の関数ポインタ（`UnmanagedCallersOnly`）で受けて `SKCanvas` を呼ぶほうが、SkiaSharp が持つ Skia のバイナリとバージョンを合わせる問題が起きない。例外は C のコアをまたがせない（C++ のアダプタと同じ）。
+
+**リリース**。`v<バージョン>` のタグで `.github/workflows/release.yml` が動き、単一ヘッダ、3 つの OS のバイナリ（静的と共有、CMake パッケージと pkg-config 込みのインストール ツリー）、xcframework、NuGet パッケージを作って、下書きのリリースに付ける。タグとヘッダのバージョンが違えば止まる。レジストリ（vcpkg、ConanCenter、WrapDB、nuget.org）への公開はしていない。リリースのあと手で直すのは、vcpkg のポートの `SHA512` と Meson の wrap の `revision` の 2 か所。
+
+ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラが違っても壊れないことを CI の MSVC と clang の両方のビルドで確かめる。依存は vendoring した Brotli のデコーダだけで、画像のデコーダもフォントの読み手も自前（§14、§15）なので、既定のビルドはどの経路でも自己完結している。
 
 ## 9. 道筋
 
 1. ~~コンテナと manifest（JSON）、Part の取得（single、split、コールバック）、deflate-raw、spec の上限。~~ 済み。
-2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI への組み込みは bdf の次のリリース後。
+2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI には `conformance` ジョブがあり、ハーネスが固定している bdf のバージョン（`go/go.mod`）でスイートを書き出して走らせる。0.1.5 まではスイートがないので何もしない。bdf の次のタグに上げれば動く。
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
 4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。読み上げ用の構造と正規化つきの検索も済み（§12）。
 5. ~~暗号化。~~ 済み。パスワードと ECDH の開錠、区間（§3.6）の合成。暗号の部品は自前（§11）。
