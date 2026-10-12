@@ -29,6 +29,10 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - 依存は libbdf → bdf の一方向。bdf は libbdf を知らない。
 - デコーダは Go の `decode.go`、`buf.go`、`path.go`、`paint.go`、`font.go`、`reader.go`、`manifest.go` を検査の順序まで含めて写した。Go の reader は最初の失敗を覚えて以後の読み取りを 0 にする。C の `bdfi_reader` も同じ振る舞いにしてあり、だから切り詰めた入力でも同じ位置・同じ文言で失敗する。
 - manifest は encoding/json が参照実装の構造体を埋めるのと同じ規則で読む。知らないメンバーは無視、null は無いのと同じ、型の違うメンバーはエラー、重複したメンバーは最後が効く、整数のフィールドは整数リテラルだけ、float32 の範囲を超える数はエラー。合わせないと決めたのは、encoding/json がメンバー名を大文字小文字を無視して照合することと、base64 の中の改行を無視すること。どちらも仕様にない encoding/json の癖で、libbdf はそこだけ厳しい。差分 fuzz（`FuzzDoc`）は「libbdf が受理するものを参照実装が拒否しない」ことと「両方が開いた文書の Part が同じに読める」ことを要求し、逆向きは要求しない。
+- テキストの抽出（`src/text.c`）は Go の `text.go` の移植で、歩き方、区切り（MARK と位置からの推定）、ALT_TEXT の扱い、上限（USE の深さ 64、再利用した Object から読む命令 2^27、run 2^22）、壊れた子 Object の扱い（そこまでの run を残して親の走査を続ける）まで同じにした。同じ上限を View の最上位 Object で数え続けること（`bdfi_use_limits`）も同じである。リンク（LINK の矩形の外接矩形と url）は Go の参照実装になく、TS の `text.ts` と `textlayer.ts` に合わせた。読み上げ用の構造（見出し・リスト・表・図）はまだ移していない。
+- **位置の計算は積和を融合しない**。行列の積と点の変換は `a*b + c*d + e` の形で、コンパイラはこれを FMA（1 回だけ丸める積和）にしてよいことになっている。Go は arm64 で融合し、amd64 では融合しない。つまり参照実装自身がアーキテクチャで最後のビットが違う。libbdf は積を `volatile float` に置いてから足すことで、どのコンパイラ・どの CPU でも融合させない。位置が環境で変わらないことを優先し、参照実装とは amd64 でビット単位に一致する（bdf の fixture も amd64 を基準にしている）。差分テストは amd64 ではビット一致、arm64 では許容差つきで位置を比べ、位置から推定した区切りは「位置がビット一致なら一致」を要求する。Apple silicon では `GOARCH=amd64 CGO_ENABLED=1 go test` が Rosetta 経由で厳密な方を回す。
+- Part 名の集合（どの子を歩いたか）は crit-bit 木で持つ。名前は文書が自由に選べるので、ハッシュ表だと衝突させて遅くできる。木なら 1 回 128 段までで済む。文書の Object のキャッシュは manifest の Part の番号で引く配列にして、表そのものを持たない。
+- View のテキスト（`bdf_doc_view_text`）は `indexRuns`、検索用テキスト（`bdf_doc_search_text`）は `SearchText` の移植。シートのタイルのキーは参照実装が書く形（符号なし、先頭の 0 なしの `x,y`）だけを受け付ける。参照実装は `fmt.Sscanf` で読むので `01,0` のような形も通るが、その先で名前の引き直しに失敗するか同じタイルを 2 度読むかで、意味のある結果にならない。正規化つきの検索（NFKC、大文字小文字、かな）は Unicode の表が要るのでまだ入れていない。ホストの正規化（ICU、Foundation、Qt、.NET）で `bdf_doc_view_text` の結果を引けば足りる。
 - inflate は参照実装（klauspost の flate）と受理が揃うようにした。不完全な Huffman 符号は長さ 1 の符号が 1 つだけの場合に限って受け付け、最後のブロックの後ろは読まない。`FuzzInflate` は両方向の一致を要求する。
 
 ## 4. C ABI の規則
@@ -49,7 +53,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
 - **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
-- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc の 4 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`）。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。
+- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text の 6 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。
 
 cgo を選んで purego にしなかったのは、`go build -asan` が cgo にしか効かないことと、同じツリーの C ソースを静的に結合したかったからである。利用者向けに cgo なしの Go 束縛を出すなら、そのときは purego で別に作る。
 
@@ -107,7 +111,7 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 1. ~~コンテナと manifest（JSON）、Part の取得（single、split、コールバック）、deflate-raw、spec の上限。~~ 済み。
 2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI への組み込みは bdf の次のリリース後。
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
-4. テキスト run、リンク、テキスト索引の検索。
+4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。残りは読み上げ用の構造（MARK の見出し・リスト・表・図）と、正規化つきの検索。
 5. 暗号化（Mbed TLS か platform の vtable）。
 6. ラスタライザの移植と、bdf の golden との比較。
 7. アダプタ。最初は Skia（Chrome の Canvas 2D の実体なので TS 版との差が最も小さく、SkiaSharp 経由で MAUI もすぐ使える）。

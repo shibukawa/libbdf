@@ -87,6 +87,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
     bdf_free(out);
   }
+  /* the text of the first views, and of the whole document for a search
+   * index (the fuzz build lowers the limit that bounds these walks) */
+  for (size_t v = 0; v < bdf_doc_view_count(doc) && v < 4; v++) {
+    bdf_text_index *idx;
+    if (bdf_doc_view_text(doc, v, 1, &idx, &err) == BDF_OK) {
+      bdf_text_index_free(idx);
+    }
+    bdf_page page;
+    bdf_layer layer;
+    bdf_text *text;
+    if (bdf_doc_page(doc, v, 0, &page) == BDF_OK && bdf_doc_layer(doc, v, 0, 0, &layer) == BDF_OK &&
+        bdf_doc_text(doc, layer.obj, &text, &err) == BDF_OK) {
+      bdf_text_free(text);
+    }
+  }
+  bdf_search_text *st;
+  if (bdf_doc_search_text(doc, &st, &err) == BDF_OK) {
+    bdf_search_text_free(st);
+  }
   bdf_doc_free(doc);
   return 0;
 }

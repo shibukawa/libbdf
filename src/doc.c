@@ -107,6 +107,11 @@ static const bdfi_part *bdfi_find_part(const bdf_doc *d, const uint8_t hash[16])
   return NULL;
 }
 
+int64_t bdfi_doc_part_index(const bdf_doc *d, const uint8_t hash[16]) {
+  const bdfi_part *p = d ? bdfi_find_part(d, hash) : NULL;
+  return p ? (int64_t)(p - d->m.parts) : -1;
+}
+
 /* ---- Opening ------------------------------------------------------------ */
 
 void bdf_doc_free(bdf_doc *d) {
@@ -475,6 +480,19 @@ bdf_status bdf_doc_view(const bdf_doc *d, size_t i, bdf_view *out) {
   out->audio_type = bdfi_str_out(&v->audio_type, &out->audio_type_len);
   out->cues = bdfi_str_out(&v->cues, &out->cues_len);
   return BDF_OK;
+}
+
+int64_t bdf_doc_view_find(const bdf_doc *d, const char *id, size_t len) {
+  if (!d || (!id && len > 0)) {
+    return -1;
+  }
+  for (size_t i = 0; i < d->m.nviews; i++) {
+    const bdfi_str *vid = &d->m.views[i].id;
+    if (vid->n == len && (len == 0 || memcmp(vid->p, id, len) == 0)) {
+      return (int64_t)i;
+    }
+  }
+  return -1;
 }
 
 bdf_status bdf_doc_view_run(const bdf_doc *d, size_t view, int rows, size_t i, float out[2]) {

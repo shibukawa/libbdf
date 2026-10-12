@@ -8,6 +8,16 @@ package cbdf
 #cgo CFLAGS: -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/brotli/include -I${SRCDIR}/../third_party/brotli/dec -I${SRCDIR}/../third_party/brotli/common -std=c11 -Wall -Wextra
 #include <stdlib.h>
 #include "bdf/bdf.h"
+
+// The resolver of the differential tests: every part whose name starts with
+// the byte 1 is the one child object, and no other part exists.
+static const bdf_object *cbdf_one_child(void *ctx, const uint8_t hash[16]) {
+  return hash[0] == 1 ? (const bdf_object *)ctx : NULL;
+}
+
+static bdf_status cbdf_extract(const bdf_object *top, const bdf_object *child, bdf_text **out, bdf_error *err) {
+  return bdf_text_extract(top, cbdf_one_child, (void *)child, out, err);
+}
 */
 import "C"
 
@@ -632,4 +642,235 @@ func FontSFNT(data []byte) ([]byte, error) {
 		b = []byte{}
 	}
 	return b, nil
+}
+
+// ---- Text -------------------------------------------------------------------
+
+// TextRun is a run of a text.
+type TextRun struct {
+	Text          string
+	X, Y          float32
+	Advance, Size float32
+	Matrix        [6]float32
+	HasFont       bool
+	Font          Font
+	Align, Sep    uint8
+	AltText       bool
+	Ordinal       uint32
+}
+
+// TextLink is a LINK area of a text.
+type TextLink struct {
+	X, Y, W, H float32
+	URL        string
+	After      int64
+}
+
+func textOf(t *C.bdf_text) ([]TextRun, []TextLink) {
+	runs := make([]TextRun, int(C.bdf_text_run_count(t)))
+	for i := range runs {
+		var cr C.bdf_text_run
+		C.bdf_text_run_at(t, C.size_t(i), &cr)
+		r := TextRun{
+			Text: goString(cr.text, cr.text_len), X: float32(cr.x), Y: float32(cr.y),
+			Advance: float32(cr.advance), Size: float32(cr.size), HasFont: cr.has_font != 0,
+			Align: uint8(cr.align), Sep: uint8(cr.sep), AltText: cr.alt_text != 0, Ordinal: uint32(cr.ordinal),
+		}
+		for k := range r.Matrix {
+			r.Matrix[k] = float32(cr.matrix[k])
+		}
+		if r.HasFont {
+			r.Font = Font{
+				Kind: uint8(cr.font.kind), Hash: hash16(cr.font.hash),
+				Family: goString(cr.font.family, cr.font.family_len),
+				Weight: uint16(cr.font.weight), Style: uint8(cr.font.style),
+			}
+		}
+		runs[i] = r
+	}
+	links := make([]TextLink, int(C.bdf_text_link_count(t)))
+	for i := range links {
+		var cl C.bdf_text_link
+		C.bdf_text_link_at(t, C.size_t(i), &cl)
+		links[i] = TextLink{
+			X: float32(cl.x), Y: float32(cl.y), W: float32(cl.w), H: float32(cl.h),
+			URL: goString(cl.url, cl.url_len), After: int64(cl.after),
+		}
+	}
+	return runs, links
+}
+
+// ExtractText walks an object with bdf_text_extract. A part whose name
+// starts with the byte 1 resolves to child (nil: to nothing).
+func ExtractText(top, child *Object) ([]TextRun, []TextLink, error) {
+	var t *C.bdf_text
+	var e C.bdf_error
+	var cchild *C.bdf_object
+	if child != nil {
+		cchild = child.p
+	}
+	if C.cbdf_extract(top.p, cchild, &t, &e) != C.BDF_OK {
+		return nil, nil, errorOf(&e)
+	}
+	defer C.bdf_text_free(t)
+	runs, links := textOf(t)
+	return runs, links, nil
+}
+
+// Text is the text of a top-level object of the document (bdf_doc_text).
+func (d *Doc) Text(hash [16]byte) ([]TextRun, []TextLink, error) {
+	var t *C.bdf_text
+	var e C.bdf_error
+	if C.bdf_doc_text(d.p, (*C.uint8_t)(unsafe.Pointer(&hash[0])), &t, &e) != C.BDF_OK {
+		return nil, nil, errorOf(&e)
+	}
+	defer C.bdf_text_free(t)
+	runs, links := textOf(t)
+	return runs, links, nil
+}
+
+// IndexRun is a run of a text index.
+type IndexRun struct {
+	A, B, Ordinal uint32
+	Sep           uint8
+	Text          string
+}
+
+func indexOf(idx *C.bdf_text_index) []IndexRun {
+	out := make([]IndexRun, int(C.bdf_text_index_count(idx)))
+	for i := range out {
+		var cr C.bdf_index_run
+		C.bdf_text_index_run(idx, C.size_t(i), &cr)
+		out[i] = IndexRun{A: uint32(cr.a), B: uint32(cr.b), Ordinal: uint32(cr.ordinal), Sep: uint8(cr.sep), Text: goString(cr.text, cr.text_len)}
+	}
+	return out
+}
+
+func plainOf(idx *C.bdf_text_index) (string, error) {
+	var out *C.char
+	var n C.size_t
+	var e C.bdf_error
+	if C.bdf_text_index_plain(idx, &out, &n, &e) != C.BDF_OK {
+		return "", errorOf(&e)
+	}
+	defer C.bdf_free(unsafe.Pointer(out))
+	return goString(out, n), nil
+}
+
+// DecodeTextIndex parses a text index part and joins it into plain text.
+func DecodeTextIndex(data []byte) ([]IndexRun, string, error) {
+	var idx *C.bdf_text_index
+	var e C.bdf_error
+	if C.bdf_text_index_decode(ptr(data), C.size_t(len(data)), &idx, &e) != C.BDF_OK {
+		return nil, "", errorOf(&e)
+	}
+	defer C.bdf_text_index_free(idx)
+	plain, err := plainOf(idx)
+	return indexOf(idx), plain, err
+}
+
+// ViewText is the text of a view (bdf_doc_view_text).
+func (d *Doc) ViewText(view int, extract bool) ([]IndexRun, error) {
+	var idx *C.bdf_text_index
+	var e C.bdf_error
+	x := C.int(0)
+	if extract {
+		x = 1
+	}
+	if C.bdf_doc_view_text(d.p, C.size_t(view), x, &idx, &e) != C.BDF_OK {
+		return nil, errorOf(&e)
+	}
+	defer C.bdf_text_index_free(idx)
+	return indexOf(idx), nil
+}
+
+// SearchPage is the text of a page; SearchView that of a view.
+type SearchPage struct {
+	Page int64
+	Text string
+}
+
+type SearchView struct {
+	ID, Kind, Title string
+	Pages           []SearchPage
+}
+
+// SearchText is the text of the document for a search index.
+func (d *Doc) SearchText() ([]SearchView, error) {
+	var st *C.bdf_search_text
+	var e C.bdf_error
+	if C.bdf_doc_search_text(d.p, &st, &e) != C.BDF_OK {
+		return nil, errorOf(&e)
+	}
+	defer C.bdf_search_text_free(st)
+	out := make([]SearchView, int(C.bdf_search_text_view_count(st)))
+	for i := range out {
+		var cv C.bdf_search_view
+		C.bdf_search_text_view(st, C.size_t(i), &cv)
+		v := SearchView{ID: goString(cv.id, cv.id_len), Kind: goString(cv.kind, cv.kind_len), Title: goString(cv.title, cv.title_len), Pages: []SearchPage{}}
+		for k := 0; k < int(cv.npages); k++ {
+			var cp C.bdf_search_page
+			C.bdf_search_text_page(st, C.size_t(i), C.size_t(k), &cp)
+			v.Pages = append(v.Pages, SearchPage{Page: int64(cp.page), Text: goString(cp.text, cp.text_len)})
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// CueSystem and Cue are the entries of a cue index part.
+type CueSystem struct {
+	Page       uint32
+	X, Y, W, H float32
+}
+
+type Cue struct {
+	Tick, System uint32
+	X            float32
+}
+
+// DecodeCues parses a cue index part.
+func DecodeCues(data []byte) ([]CueSystem, []Cue, error) {
+	var c *C.bdf_cues
+	var e C.bdf_error
+	if C.bdf_cues_decode(ptr(data), C.size_t(len(data)), &c, &e) != C.BDF_OK {
+		return nil, nil, errorOf(&e)
+	}
+	defer C.bdf_cues_free(c)
+	systems := make([]CueSystem, int(C.bdf_cues_system_count(c)))
+	for i := range systems {
+		var cs C.bdf_cue_system
+		C.bdf_cues_system(c, C.size_t(i), &cs)
+		systems[i] = CueSystem{Page: uint32(cs.page), X: float32(cs.x), Y: float32(cs.y), W: float32(cs.w), H: float32(cs.h)}
+	}
+	cues := make([]Cue, int(C.bdf_cues_count(c)))
+	for i := range cues {
+		var cq C.bdf_cue
+		C.bdf_cues_cue(c, C.size_t(i), &cq)
+		cues[i] = Cue{Tick: uint32(cq.tick), System: uint32(cq.system), X: float32(cq.x)}
+	}
+	return systems, cues, nil
+}
+
+// LinkTarget is what a LINK url leads to (bdf_link_parse); View is decoded.
+type LinkTarget struct {
+	Kind int
+	Page int64
+	View string
+}
+
+// ParseLink classifies a LINK url.
+func ParseLink(url string) LinkTarget {
+	cs := C.CString(url)
+	defer C.free(unsafe.Pointer(cs))
+	var t C.bdf_link_target
+	kind := C.bdf_link_parse(cs, C.size_t(len(url)), &t)
+	out := LinkTarget{Kind: int(kind), Page: int64(t.page)}
+	if kind == C.BDF_LINK_VIEW {
+		buf := make([]byte, len(url)+1)
+		if n := C.bdf_link_view_id(&t, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf))); n >= 0 {
+			out.View = string(buf[:n])
+		}
+	}
+	return out
 }
