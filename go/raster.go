@@ -64,10 +64,66 @@ type Renderer struct{ p *C.bdf_renderer }
 // NewRenderer makes a renderer; background is 0xRRGGBBAA, used when
 // hasBackground.
 func (d *Doc) NewRenderer(hasBackground bool, background uint32) (*Renderer, error) {
+	return d.NewRendererWith(nil, hasBackground, background)
+}
+
+// Fonts is a bdf_fonts: the fonts a renderer draws the text with that names
+// its font.
+type Fonts struct{ p *C.bdf_fonts }
+
+// NewFonts is bdf_fonts_new.
+func NewFonts() *Fonts {
+	var f *C.bdf_fonts
+	var e C.bdf_error
+	if C.bdf_fonts_new(&f, &e) != C.BDF_OK {
+		panic(errorOf(&e))
+	}
+	return &Fonts{f}
+}
+
+// AddFile is bdf_fonts_add_file.
+func (f *Fonts) AddFile(path string) error {
+	cs := C.CString(path)
+	defer C.free(unsafe.Pointer(cs))
+	var e C.bdf_error
+	if C.bdf_fonts_add_file(f.p, cs, &e) != C.BDF_OK {
+		return errorOf(&e)
+	}
+	return nil
+}
+
+// Add is bdf_fonts_add.
+func (f *Fonts) Add(data []byte) error {
+	var p *C.uint8_t
+	if len(data) > 0 {
+		p = (*C.uint8_t)(unsafe.Pointer(&data[0]))
+	}
+	var e C.bdf_error
+	if C.bdf_fonts_add(f.p, p, C.size_t(len(data)), &e) != C.BDF_OK {
+		return errorOf(&e)
+	}
+	return nil
+}
+
+// Count is bdf_fonts_count.
+func (f *Fonts) Count() int { return int(C.bdf_fonts_count(f.p)) }
+
+// Close frees the fonts: after the renderers that draw with them.
+func (f *Fonts) Close() {
+	C.bdf_fonts_free(f.p)
+	f.p = nil
+}
+
+// NewRendererWith is bdf_renderer_new with fonts for the text that names
+// its font (nil: none).
+func (d *Doc) NewRendererWith(fonts *Fonts, hasBackground bool, background uint32) (*Renderer, error) {
 	var opts C.bdf_render_options
 	if hasBackground {
 		opts.has_background = 1
 		opts.background = C.uint32_t(background)
+	}
+	if fonts != nil {
+		opts.fonts = fonts.p
 	}
 	var r *C.bdf_renderer
 	var e C.bdf_error

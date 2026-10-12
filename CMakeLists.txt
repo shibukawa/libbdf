@@ -53,6 +53,9 @@ set(BDF_SOURCES
   src/img_vp8l.c
   src/img_webp.c
   src/rimage.c
+  src/sfnt.c
+  src/fontdb.c
+  src/rtext.c
   src/rdraw.c
   src/render.c
   src/version.c)

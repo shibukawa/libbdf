@@ -1000,12 +1000,42 @@ BDF_API bdf_status bdf_text_hits_segment(const bdf_text_hits *hits, size_t i, si
  */
 typedef struct bdf_renderer bdf_renderer;
 
+/*
+ * bdf_fonts is a set of fonts for the text that names its font instead of
+ * carrying it (HTML, Markdown and EPUB documents, and others converted
+ * with system fonts) and for the characters an embedded font lacks. The
+ * renderer finds a face for a family in it as the reference implementation
+ * does: the family itself, a family that looks alike or has its metrics, a
+ * generic family of the same kind, and at last any face. libbdf reads no
+ * font directories: the application adds the files it wants drawn with, in
+ * the order they are to be preferred in.
+ *
+ * bdf_fonts_add copies a font file that is in memory (TrueType, OpenType,
+ * or a collection of them); bdf_fonts_add_file takes a path, reads the
+ * names of its faces now and the glyphs when a renderer first draws with
+ * one. Both return BDF_ERR_FORMAT for what has no face that can be read. A
+ * set is not changed once a renderer has it; renderers on several threads
+ * may share one, which must outlive them.
+ */
+typedef struct bdf_fonts bdf_fonts;
+
+BDF_API bdf_status bdf_fonts_new(bdf_fonts **out, bdf_error *err);
+BDF_API void bdf_fonts_free(bdf_fonts *fonts);
+BDF_API bdf_status bdf_fonts_add(bdf_fonts *fonts, const uint8_t *data, size_t len,
+                                 bdf_error *err);
+BDF_API bdf_status bdf_fonts_add_file(bdf_fonts *fonts, const char *path, bdf_error *err);
+/* bdf_fonts_count returns the number of faces in the set. */
+BDF_API size_t bdf_fonts_count(const bdf_fonts *fonts);
+
 typedef struct bdf_render_options {
   /* The colour behind the content, 0xRRGGBBAA, when has_background: else
    * white for pages and regions, and nothing for bdf_render_object. A
    * background of 0 is a transparent page. */
   int has_background;
   uint32_t background;
+  /* The fonts for text that names its font, or NULL: such text is then not
+   * drawn, with a warning. */
+  const bdf_fonts *fonts;
 } bdf_render_options;
 
 BDF_API bdf_status bdf_renderer_new(const bdf_doc *doc, const bdf_render_options *opts,

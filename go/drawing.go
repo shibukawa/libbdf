@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/shibukawa/bdf"
+	"github.com/shibukawa/bdf/font/woff2"
 )
 
 // The random drawings the rendering tests compare libbdf and the reference
@@ -35,6 +36,7 @@ type drawing struct {
 	paints []bdf.PaintRef
 	uses   []bdf.ObjRef
 	images []bdf.ImageRef
+	fonts  []bdf.FontRef
 	depth  int
 	groups int
 	masks  int
@@ -123,7 +125,7 @@ func (d *drawing) pattern(img bdf.ImageRef) bdf.Paint {
 
 // newDrawing starts a drawing with paths and paints, and uses of the
 // objects and images given.
-func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash) *drawing {
+func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash, fonts []bdf.Hash) *drawing {
 	d := &drawing{r: r, o: bdf.NewObject()}
 	for range 2 + r.IntN(4) {
 		d.paths = append(d.paths, d.o.AddPath(d.path()))
@@ -147,7 +149,67 @@ func newDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash)
 			d.paints = append(d.paints, d.o.AddPaint(d.pattern(bdf.ImageRef(len(d.images)+r.IntN(3))))) // an image there is not
 		}
 	}
+	// and the fonts after them: nil for a drawing without text, empty for
+	// one whose fonts are all named
+	if fonts != nil {
+		for range 1 + r.IntN(4) {
+			f := bdf.SystemFont(pickOf(r, textFamilies), pickOf(r, []uint16{100, 400, 400, 500, 600, 700, 900}), byte(r.IntN(3)))
+			if len(fonts) > 0 && r.IntN(2) == 0 {
+				f.Kind, f.Hash = bdf.FontEmbedded, pickOf(r, fonts)
+			}
+			d.fonts = append(d.fonts, d.o.AddFont(f))
+		}
+	}
 	return d
+}
+
+// The families a random text names: ones the fonts of the tests have, ones
+// they stand in for, generic ones, lists of them, and none at all.
+var textFamilies = []string{
+	"sans-serif", "serif", "monospace", "cursive", "system-ui, sans-serif", "DejaVu Sans", "dejavu-sans", "M PLUS 1p",
+	"Test Sans", "Test Serif", "test mono, Test Sans", "Test Sans Bold",
+	"STIX Two Math", "Arial", "Arial Black", "Helvetica Neue", "Times New Roman", "Courier New", "Meiryo", "MS Gothic",
+	"\u6e38\u30b4\u30b7\u30c3\u30af", "'DejaVu Sans', serif", "\"M PLUS 1p\", sans-serif", "No Such Font", "No Such Font, monospace",
+	"\uff24\uff45\uff4a\uff41\uff36\uff55 \uff33\uff41\uff4e\uff53", "", " , ,", "Sans-Serif", "MONOSPACE", "'quoted \\' name'", "Segoe UI Symbol",
+}
+
+// The strings a random text draws: words, other scripts, both directions,
+// what a canvas draws as spaces, what no font has, and bytes that are no
+// text.
+var textStrings = []string{
+	"Hello, world", "fi fl AV To", "0123456789", "a", " ", "The quick brown fox", "x\ty\nz", "caf\u00e9 na\u00efve",
+	"\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8", "\u3053\u3093\u306b\u3061\u306f world", "\u05e9\u05dc\u05d5\u05dd", "abc \u05e9\u05dc\u05d5\u05dd def",
+	"\u0645\u0631\u062d\u0628\u0627 123 abc", "\u05d0 1 2 \u05d1", "\u2211\u222b\u221a x\u00b2", "\U0001d49c\U0001f600", "e\u0301\u0323", "\u200f\u200e",
+	"\ufffd", "(\u05d0)", "MM\u00d7WW",
+}
+
+// textStep sets a font or the style of text, or draws a string.
+func (d *drawing) textStep() {
+	r, o := d.r, d.o
+	switch r.IntN(8) {
+	case 0, 1:
+		f := pickOf(r, d.fonts)
+		if r.IntN(30) == 0 {
+			f = bdf.FontRef(len(d.fonts) + r.IntN(2)) // one there is not
+		}
+		o.Font(f, pickOf(r, []float32{0, -3, 4, 7.5, 10, 12, 16, 24, 40, 9, 36, 20.25}))
+	case 2:
+		o.TextStyle(byte(pickOf(r, []int{0, 1, 2, 3, 4, 9})), byte(r.IntN(7)), byte(r.IntN(4)), pickOf(r, []float32{0, 0, 0, 1.5, -0.5, 4}))
+	default:
+		s := pickOf(r, textStrings)
+		if r.IntN(12) == 0 {
+			s = string([]byte{'a', 0xff, 0xe3, 0x81, 'b'}) // not UTF-8
+		}
+		advance := float32(0)
+		if r.IntN(3) == 0 {
+			advance = float32(5 + r.IntN(150))
+		}
+		if r.IntN(4) == 0 {
+			o.StrokeText(s, d.c(), d.c(), advance)
+		} else {
+			o.FillText(s, d.c(), d.c(), advance)
+		}
+	}
 }
 
 // imageStep draws an image, or changes how images are drawn.
@@ -196,6 +258,10 @@ func (d *drawing) step() {
 	r, o := d.r, d.o
 	if len(d.images) > 0 && r.IntN(5) == 0 {
 		d.imageStep()
+		return
+	}
+	if len(d.fonts) > 0 && r.IntN(3) == 0 {
+		d.textStep()
 		return
 	}
 	switch r.IntN(44) {
@@ -322,12 +388,12 @@ func (d *drawing) finish() *bdf.Object {
 // RandomDrawing is an object of random instructions that uses the objects
 // given.
 func RandomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect) *bdf.Object {
-	return randomDrawing(r, children, nil)
+	return randomDrawing(r, children, nil, nil)
 }
 
-// randomDrawing is RandomDrawing with images to draw as well.
-func randomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash) *bdf.Object {
-	d := newDrawing(r, children, images)
+// randomDrawing is RandomDrawing with images and text to draw as well.
+func randomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Hash, fonts []bdf.Hash) *bdf.Object {
+	d := newDrawing(r, children, images, fonts)
 	for range 4 + r.IntN(40) {
 		d.step()
 	}
@@ -338,7 +404,38 @@ func randomDrawing(r *rand.Rand, children map[bdf.Hash]bdf.Rect, images []bdf.Ha
 // each other, pages of several layers, a scroll view of strips cut to their
 // bodies, and a sheet of tiles with gridlines.
 func RandomDocument(r *rand.Rand) *bdf.Document {
-	return randomDocument(r, bdf.NewDocument(), nil)
+	return randomDocument(r, bdf.NewDocument(), nil, nil)
+}
+
+// RandomTextDocument is RandomDocument with text in its drawings: in fonts
+// that are named, and in the font programs given, which the document
+// carries as they are, packed as WOFF2, or damaged.
+func RandomTextDocument(r *rand.Rand, programs [][]byte) *bdf.Document {
+	doc := bdf.NewDocument()
+	fonts := []bdf.Hash{}
+	for range r.IntN(4) {
+		if len(programs) == 0 {
+			break
+		}
+		data := pickOf(r, programs)
+		switch r.IntN(10) {
+		case 0:
+			if packed, err := woff2.Encode(data); err == nil {
+				data = packed
+			}
+		case 1:
+			data = data[:len(data)*(1+r.IntN(9))/10] // cut short
+		case 2:
+			data = append([]byte(nil), data...)
+			for range 1 + r.IntN(8) {
+				data[r.IntN(len(data))] ^= 1 << r.IntN(8) // damaged
+			}
+		case 3:
+			data = []byte("wOFF, by its first bytes")
+		}
+		fonts = append(fonts, doc.AddFont(data))
+	}
+	return randomDocument(r, doc, nil, fonts)
 }
 
 // RandomImageDocument is RandomDocument with images of the formats given
@@ -350,19 +447,19 @@ func RandomImageDocument(r *rand.Rand, formats ...string) *bdf.Document {
 	for range 1 + r.IntN(4) {
 		images = append(images, doc.AddImage(RandomImage(r, formats...)))
 	}
-	return randomDocument(r, doc, images)
+	return randomDocument(r, doc, images, nil)
 }
 
-func randomDocument(r *rand.Rand, doc *bdf.Document, images []bdf.Hash) *bdf.Document {
+func randomDocument(r *rand.Rand, doc *bdf.Document, images []bdf.Hash, fonts []bdf.Hash) *bdf.Document {
 	// objects that draw nothing else, then ones that draw those, then pages
 	leaves := map[bdf.Hash]bdf.Rect{}
 	for range 1 + r.IntN(3) {
-		h, box := doc.AddObject(randomDrawing(r, nil, images))
+		h, box := doc.AddObject(randomDrawing(r, nil, images, fonts))
 		leaves[h] = box
 	}
 	middle := map[bdf.Hash]bdf.Rect{}
 	for range r.IntN(3) {
-		h, box := doc.AddObject(randomDrawing(r, leaves, images))
+		h, box := doc.AddObject(randomDrawing(r, leaves, images, fonts))
 		middle[h] = box
 	}
 	for _, h := range sortedHashes(leaves) {
@@ -371,7 +468,7 @@ func randomDocument(r *rand.Rand, doc *bdf.Document, images []bdf.Hash) *bdf.Doc
 		}
 	}
 	layer := func() bdf.Layer {
-		h, _ := doc.AddObject(randomDrawing(r, middle, images))
+		h, _ := doc.AddObject(randomDrawing(r, middle, images, fonts))
 		return bdf.Layer{Role: pickOf(r, []string{bdf.RoleBody, bdf.RoleBody, bdf.RoleBackground, bdf.RoleAnnotation, bdf.RoleHeader}), Obj: h}
 	}
 	pages := doc.NewView("pages", bdf.ViewFixed, "")
@@ -396,7 +493,7 @@ func randomDocument(r *rand.Rand, doc *bdf.Document, images []bdf.Hash) *bdf.Doc
 	sheet.Rows = []bdf.Run{{float32(1 + r.IntN(30)), float32(8+r.IntN(20)) + 0.25}, {2, 0}, {float32(1 + r.IntN(5)), 33}}
 	sheet.Tiles = map[string]string{}
 	for range r.IntN(7) {
-		h, _ := doc.AddObject(randomDrawing(r, middle, images))
+		h, _ := doc.AddObject(randomDrawing(r, middle, images, fonts))
 		sheet.Tiles[fmt.Sprintf("%d,%d", r.IntN(4), r.IntN(3))] = h.String()
 	}
 	if r.IntN(4) == 0 {

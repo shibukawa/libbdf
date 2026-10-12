@@ -427,6 +427,13 @@ BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, cons
 /* bdfi_nfc normalises UTF-8 to form C into a buffer of its own (NUL after
  * it): 0, or -1 when out of memory. Bytes that are not UTF-8 are kept. */
 BDF_INTERNAL int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len);
+/* bdfi_nfkc does the same for form KC. */
+BDF_INTERNAL int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len);
+BDF_INTERNAL uint32_t bdfi_to_lower(uint32_t c);
+BDF_INTERNAL int bdfi_bidi_direction(uint32_t c);
+BDF_INTERNAL uint32_t bdfi_utf8_rune(const char *s, size_t n, size_t *len);
+BDF_INTERNAL int bdfi_go_is_space(uint32_t c);
+BDF_INTERNAL int bdfi_family_key(const char *name, size_t n, char **out, size_t *out_len);
 
 /* bdfi_utf8_next decodes the character at s[i] (i < n) as a decoder does
  * that replaces what is malformed, the browser's: its value, U+FFFD for the

@@ -429,3 +429,60 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
   }
   return m;
 }
+
+bdfi_irect bdfi_irect_union(bdfi_irect r, bdfi_irect s) {
+  if (bdfi_irect_empty(r)) {
+    return s;
+  }
+  if (bdfi_irect_empty(s)) {
+    return r;
+  }
+  if (r.x0 > s.x0) {
+    r.x0 = s.x0;
+  }
+  if (r.y0 > s.y0) {
+    r.y0 = s.y0;
+  }
+  if (r.x1 < s.x1) {
+    r.x1 = s.x1;
+  }
+  if (r.y1 < s.y1) {
+    r.y1 = s.y1;
+  }
+  return r;
+}
+
+
+/* The larger coverage of two masks at each pixel. The result is one of the
+ * two (with a reference of its own) when the other is empty. */
+bdfi_mask *bdfi_mask_union(bdfi_mask *a, bdfi_mask *b) {
+  if (bdfi_mask_is_empty(a)) {
+    return bdfi_mask_ref(b);
+  }
+  if (bdfi_mask_is_empty(b)) {
+    return bdfi_mask_ref(a);
+  }
+  bdfi_irect r = bdfi_irect_union(a->r, b->r);
+  bdfi_mask *out = bdfi_mask_new(r, 1);
+  if (!out) {
+    return NULL;
+  }
+  const bdfi_mask *both[2] = {a, b};
+  for (int k = 0; k < 2; k++) {
+    const bdfi_mask *m = both[k];
+    int w = BDFI_DX(m->r);
+    for (int y = m->r.y0; y < m->r.y1; y++) {
+      const float *row = bdfi_mask_row(m, y, m->r.x0);
+      float *o = out->a + (size_t)(y - r.y0) * (size_t)BDFI_DX(r) + (size_t)(m->r.x0 - r.x0);
+      for (int x = 0; x < w; x++) {
+        float v = row ? row[x] : 1;
+        /* the larger; a coverage is never a NaN */
+        if (v > o[x]) {
+          o[x] = v;
+        }
+      }
+    }
+  }
+  return out;
+}
+
