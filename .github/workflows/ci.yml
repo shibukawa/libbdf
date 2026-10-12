@@ -81,6 +81,8 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON ${{ matrix.flags }}
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
+      - name: How far from the rasterizer
+        run: ./build/adapters/compare_${{ matrix.name }}
       - name: Check the installed package
         run: |
           cmake --install build --prefix "${{ runner.temp }}/prefix"
@@ -107,6 +109,8 @@ jobs:
       - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_SKIA=ON -DBDF_SKIA_DIR="$RUNNER_TEMP/skia"
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
+      - name: How far from the rasterizer
+        run: ./build/adapters/compare_skia
 
   # The unit tests once more under AddressSanitizer and UndefinedBehaviorSanitizer.
   # Fuzzing is not run here (see the fuzz job): this replays what the tests
