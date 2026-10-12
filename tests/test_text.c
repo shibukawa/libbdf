@@ -209,16 +209,26 @@ static void expect_run_nodes(const bdf_text *t, const char *want, int line) {
   }
 }
 
+/* The object of the last extract: the strings of its text point into it, so
+ * it stays until the next one, when that text is done with. */
+static bdf_object *extracted;
+
+static void extract_done(void) {
+  bdf_object_free(extracted);
+  extracted = NULL;
+}
+
 static bdf_text *extract(ob *o, objs *children) {
-  bdf_object *obj = ob_decode(o);
+  extract_done();
+  extracted = ob_decode(o);
   bdf_text *t = NULL;
   bdf_error err;
-  if (!obj || bdf_text_extract(obj, children ? by_id : NULL, children, &t, &err) != BDF_OK) {
+  if (!extracted ||
+      bdf_text_extract(extracted, children ? by_id : NULL, children, &t, &err) != BDF_OK) {
     failures++;
-    fprintf(stderr, "extract: %s\n", obj ? err.message : "the object does not decode");
+    fprintf(stderr, "extract: %s\n", extracted ? err.message : "the object does not decode");
     exit(1);
   }
-  /* the strings of the text point into the object, which is not freed: a test */
   return t;
 }
 
@@ -378,6 +388,7 @@ static void test_nodes_containers(void) {
   expect_nodes(t, "list:-1|item:0|par:1|item:0|par:3|fig:3:alt=left open:b0,0,0,0", __LINE__);
   expect_run_nodes(t, "2,4", __LINE__);
   bdf_text_free(t);
+  bdf_object_free(child);
 
   /* the language of runs, and the node a link belongs to */
   ob l = {0};
@@ -463,6 +474,7 @@ static void test_nodes_figures(void) {
   t = extract(&p, &children);
   expect_nodes(t, "fig:-1:alt=outer:b40,-8,268,216|fig:0:alt=inner:b200,200,8,8|par:0", __LINE__);
   bdf_text_free(t);
+  bdf_object_free(child);
 
   /* a mask is no content: neither its marks nor what it draws */
   ob m = {0};
@@ -1126,6 +1138,7 @@ int main(void) {
   test_nodes_leaves();
   test_nodes_containers();
   test_nodes_figures();
+  extract_done();
   test_bad_references();
   test_nesting();
   test_masks_and_links();

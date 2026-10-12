@@ -110,6 +110,9 @@ void bdfi_sha256_init(bdfi_sha256 *s) {
 
 void bdfi_sha256_update(bdfi_sha256 *s, const void *data, size_t len) {
   const uint8_t *p = data;
+  if (len == 0) {
+    return; /* and data may be NULL, which memcpy is not to be given */
+  }
   s->len += len;
   if (s->n > 0) {
     size_t take = 64 - s->n < len ? 64 - s->n : len;
