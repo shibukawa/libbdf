@@ -333,8 +333,8 @@ bdf_status bdf_doc_part(const bdf_doc *d, const uint8_t hash[16], uint8_t **out,
   if (!e) {
     return bdfi_fail(err, "unknown part");
   }
-  uint8_t *stored;
-  size_t stored_len;
+  uint8_t *stored = NULL;
+  size_t stored_len = 0;
   bdf_status st = bdfi_load_stored(d, e, &stored, &stored_len, err);
   if (st != BDF_OK) {
     return st;

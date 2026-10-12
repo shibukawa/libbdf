@@ -44,7 +44,7 @@ void bdf_text_index_free(bdf_text_index *idx) {
 static int bdfi_index_push(bdf_text_index *idx, const bdfi_irun *run) {
   if (idx->n == idx->cap) {
     size_t cap = idx->cap ? idx->cap * 2 : 64;
-    bdfi_irun *runs = cap > SIZE_MAX / sizeof *runs ? NULL : realloc(idx->runs, cap * sizeof *runs);
+    bdfi_irun *runs = bdfi_realloc_array(idx->runs, cap, sizeof *runs);
     if (!runs) {
       return -1;
     }
@@ -341,7 +341,7 @@ static bdfi_objcache *bdfi_objcache_new(const bdf_doc *doc) {
   c->doc = doc;
   c->n = bdf_doc_part_count(doc);
   if (c->n > 0) {
-    c->objs = c->n > SIZE_MAX / sizeof *c->objs ? NULL : calloc(c->n, sizeof *c->objs);
+    c->objs = bdfi_calloc_array(c->n, sizeof *c->objs);
     c->state = calloc(c->n, 1);
     if (!c->objs || !c->state) {
       bdfi_objcache_free(c);
@@ -462,8 +462,8 @@ static size_t bdfi_ptr_hash(const char *p) {
 static const char *bdfi_intern_get(bdfi_intern *m, bdfi_arena *arena, const char *s, size_t len) {
   if (m->n * 2 >= m->cap) {
     size_t cap = m->cap ? m->cap * 2 : 64;
-    const char **keys = cap > SIZE_MAX / sizeof *keys ? NULL : calloc(cap, sizeof *keys);
-    const char **vals = cap > SIZE_MAX / sizeof *vals ? NULL : calloc(cap, sizeof *vals);
+    const char **keys = bdfi_calloc_array(cap, sizeof *keys);
+    const char **vals = bdfi_calloc_array(cap, sizeof *vals);
     if (!keys || !vals) {
       free(keys);
       free(vals);
@@ -613,7 +613,7 @@ static bdf_status bdfi_view_extract(const bdf_doc *doc, size_t view, const bdf_v
   }
   if (w.sheet) {
     size_t n = v->ntiles;
-    tiles = n > SIZE_MAX / sizeof *tiles ? NULL : malloc((n ? n : 1) * sizeof *tiles);
+    tiles = bdfi_malloc_array(n, sizeof *tiles);
     if (!tiles) {
       st = BDF_ERR_NOMEM;
       bdfi_error_set(err, st, 0, "out of memory");
@@ -829,7 +829,7 @@ static int bdfi_search_add_page(bdf_search_text *st, bdfi_sview *sv, size_t *cap
   buf[z] = '\0';
   if (sv->npages == *cap) {
     size_t grown = *cap ? *cap * 2 : 8;
-    bdfi_spage *pages = grown > SIZE_MAX / sizeof *pages ? NULL : realloc(sv->pages, grown * sizeof *pages);
+    bdfi_spage *pages = bdfi_realloc_array(sv->pages, grown, sizeof *pages);
     if (!pages) {
       return -1;
     }
@@ -857,7 +857,7 @@ bdf_status bdf_doc_search_text(const bdf_doc *doc, bdf_search_text **out, bdf_er
   }
   bdfi_arena_init(&st->arena);
   size_t nviews = bdf_doc_view_count(doc);
-  st->views = nviews > SIZE_MAX / sizeof *st->views ? NULL : calloc(nviews ? nviews : 1, sizeof *st->views);
+  st->views = bdfi_calloc_array(nviews, sizeof *st->views);
   bdf_text_index *idx = NULL;
   bdfi_page_ref *refs = NULL;
   size_t *order = NULL;
@@ -901,8 +901,8 @@ bdf_status bdf_doc_search_text(const bdf_doc *doc, bdf_search_text **out, bdf_er
       }
     } else if (idx->n > 0) {
       /* the runs of a page are in order, those of its layers one after another */
-      refs = idx->n > SIZE_MAX / sizeof *refs ? NULL : malloc(idx->n * sizeof *refs);
-      order = idx->n > SIZE_MAX / sizeof *order ? NULL : malloc(idx->n * sizeof *order);
+      refs = bdfi_malloc_array(idx->n, sizeof *refs);
+      order = bdfi_malloc_array(idx->n, sizeof *order);
       if (!refs || !order) {
         goto fail;
       }

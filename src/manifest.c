@@ -302,7 +302,7 @@ static int bdfi_mp_dedupe_tiles(bdfi_mp *p, bdfi_view *v) {
   if (n < 2) {
     return 0;
   }
-  bdfi_tile_ref *refs = n > SIZE_MAX / sizeof *refs ? NULL : malloc(n * sizeof *refs);
+  bdfi_tile_ref *refs = bdfi_malloc_array(n, sizeof *refs);
   uint8_t *drop = calloc(n, 1);
   if (!refs || !drop) {
     free(refs);

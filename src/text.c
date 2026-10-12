@@ -89,7 +89,7 @@ int bdfi_hash_set_add(bdfi_hash_set *s, const uint8_t key[16]) {
   }
   if (s->nkeys == s->cap_keys) {
     size_t cap = s->cap_keys ? s->cap_keys * 2 : 16;
-    uint8_t *keys = realloc(s->keys, cap * 16);
+    uint8_t *keys = bdfi_realloc_array(s->keys, cap, 16);
     if (!keys) {
       return -1;
     }
@@ -98,7 +98,7 @@ int bdfi_hash_set_add(bdfi_hash_set *s, const uint8_t key[16]) {
   }
   if (s->nnodes == s->cap_nodes) {
     size_t cap = s->cap_nodes ? s->cap_nodes * 2 : 16;
-    bdfi_cb_node *nodes = realloc(s->nodes, cap * sizeof *nodes);
+    bdfi_cb_node *nodes = bdfi_realloc_array(s->nodes, cap, sizeof *nodes);
     if (!nodes) {
       return -1;
     }
@@ -309,7 +309,7 @@ static void bdfi_tx_emit(bdfi_tx *t, const char *text, size_t len, float x, floa
   }
   if (out->nruns == out->cap_runs) {
     size_t cap = out->cap_runs ? out->cap_runs * 2 : 64;
-    bdfi_run *runs = realloc(out->runs, cap * sizeof *runs);
+    bdfi_run *runs = bdfi_realloc_array(out->runs, cap, sizeof *runs);
     if (!runs) {
       t->oom = 1;
       return;
@@ -345,7 +345,7 @@ static void bdfi_tx_link(bdfi_tx *t, const bdfi_tstate *st, float x, float y, fl
   }
   if (out->nlinks == out->cap_links) {
     size_t cap = out->cap_links ? out->cap_links * 2 : 16;
-    bdfi_link *links = realloc(out->links, cap * sizeof *links);
+    bdfi_link *links = bdfi_realloc_array(out->links, cap, sizeof *links);
     if (!links) {
       t->oom = 1;
       return;
@@ -456,7 +456,7 @@ static int bdfi_tx_walk(bdfi_tx *t, const bdf_object *o, const float m[6], int r
     case BDF_OP_SAVE:
       if (nstack == cap_stack) {
         size_t cap = cap_stack ? cap_stack * 2 : 8;
-        bdfi_tstate *grown = cap > SIZE_MAX / sizeof *grown ? NULL : realloc(stack, cap * sizeof *grown);
+        bdfi_tstate *grown = bdfi_realloc_array(stack, cap, sizeof *grown);
         if (!grown) {
           t->oom = 1;
           break;

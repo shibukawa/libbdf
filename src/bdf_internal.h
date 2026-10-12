@@ -74,6 +74,14 @@ BDF_INTERNAL void bdfi_error_from_reader(bdf_error *err, const bdfi_reader *r);
 /* bdfi_alloc_items allocates n zeroed items of size bytes, or sets *oom; n
  * may be 0, which returns NULL without an error. */
 BDF_INTERNAL void *bdfi_alloc_items(size_t n, size_t size, int *oom);
+/*
+ * Arrays of n items of size bytes: NULL when out of memory, and for more
+ * than PTRDIFF_MAX bytes, which no object can be. For n == 0 they return a
+ * pointer that can be freed. bdfi_calloc_array zeroes.
+ */
+BDF_INTERNAL void *bdfi_malloc_array(size_t n, size_t size);
+BDF_INTERNAL void *bdfi_calloc_array(size_t n, size_t size);
+BDF_INTERNAL void *bdfi_realloc_array(void *p, size_t n, size_t size);
 
 /* bdfi_arena hands out memory that is freed all at once. */
 typedef struct bdfi_arena_chunk bdfi_arena_chunk;
