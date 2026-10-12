@@ -88,7 +88,7 @@ if(BDF_SKIA)
   # its root: its headers are included as Skia's own are ("include/core/..."),
   # and its library is looked for under out/ there, unless BDF_SKIA_LIBRARY
   # names it. BDF_SKIA_LINK is what that library needs to be linked with,
-  # when it is not what a build without its own codecs and fonts needs.
+  # when that is not the frameworks (or fontconfig and FreeType) and zlib.
   set(BDF_SKIA_DIR "" CACHE PATH "The root of Skia: its include/ and, under out/, its library")
   set(BDF_SKIA_LIBRARY "" CACHE FILEPATH "The library of Skia, when it is not under BDF_SKIA_DIR/out")
   set(BDF_SKIA_LINK "" CACHE STRING "What the library of Skia is linked with (a list)")
@@ -106,9 +106,9 @@ if(BDF_SKIA)
   if(NOT BDF_SKIA_LINK)
     if(APPLE)
       set(BDF_SKIA_LINK "-framework CoreFoundation" "-framework CoreGraphics" "-framework CoreText"
-        "-framework CoreServices")
+        "-framework CoreServices" z)
     elseif(UNIX)
-      set(BDF_SKIA_LINK fontconfig freetype pthread dl)
+      set(BDF_SKIA_LINK fontconfig freetype z pthread dl)
     endif()
   endif()
   message(STATUS "Skia: ${BDF_SKIA_LIBRARY}")
