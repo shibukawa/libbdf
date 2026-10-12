@@ -72,6 +72,7 @@ jobs:
         include:
           - { name: cairo, os: ubuntu-latest, packages: libcairo2-dev, flags: "-DBDF_CAIRO=ON" }
           - { name: coregraphics, os: macos-latest, packages: "", flags: "-DBDF_COREGRAPHICS=ON" }
+          - { name: qt, os: ubuntu-latest, packages: qt6-base-dev, flags: "-DBDF_QT=ON" }
     steps:
       - uses: actions/checkout@v7
       - name: Install what the adapter draws with
@@ -85,6 +86,28 @@ jobs:
           cmake --install build --prefix "${{ runner.temp }}/prefix"
           test -f "${{ runner.temp }}/prefix/include/bdf/bdf_${{ matrix.name }}.h"
           test -f "${{ runner.temp }}/prefix/lib/libbdf_${{ matrix.name }}.a"
+
+  # The Skia adapter, against a build of Skia: Skia has no releases of its
+  # own, and this is the one Aseprite publishes for its builds
+  # (github.com/aseprite/skia), of the milestone the adapter is written for.
+  adapter-skia:
+    runs-on: macos-latest
+    env:
+      SKIA_URL: https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip
+      SKIA_SHA256: ""
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fetch a build of Skia
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/skia.zip" "$SKIA_URL"
+          shasum -a 256 "$RUNNER_TEMP/skia.zip"
+          if [ -n "$SKIA_SHA256" ]; then echo "$SKIA_SHA256  $RUNNER_TEMP/skia.zip" | shasum -a 256 -c -; fi
+          mkdir "$RUNNER_TEMP/skia"
+          unzip -q "$RUNNER_TEMP/skia.zip" -d "$RUNNER_TEMP/skia"
+          ls "$RUNNER_TEMP/skia" "$RUNNER_TEMP/skia/out"/*
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_SKIA=ON -DBDF_SKIA_DIR="$RUNNER_TEMP/skia"
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
 
   # The unit tests once more under AddressSanitizer and UndefinedBehaviorSanitizer.
   # Fuzzing is not run here (see the fuzz job): this replays what the tests
