@@ -137,7 +137,9 @@ static uint8_t *transformed(unsigned num_glyphs, unsigned option_flags, const ui
   size_t pos = 36;
   for (int i = 0; i < 7; i++) {
     put32(t + 8 + 4 * i, (uint32_t)n[i]);
-    memcpy(t + pos, s[i], n[i]);
+    if (n[i] > 0) { /* an empty stream has no bytes to copy, and may be NULL */
+      memcpy(t + pos, s[i], n[i]);
+    }
     pos += n[i];
   }
   if (olen) {

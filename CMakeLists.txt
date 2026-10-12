@@ -63,7 +63,9 @@ target_include_directories(bdf PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 if(BDF_BROTLI_INCLUDE)
-  target_include_directories(bdf PRIVATE ${BDF_BROTLI_INCLUDE})
+  # SYSTEM: Brotli's headers declare array parameters with sizes, which gcc's
+  # -Wvla takes for variable length arrays; they are not ours to warn about.
+  target_include_directories(bdf SYSTEM PRIVATE ${BDF_BROTLI_INCLUDE})
 endif()
 target_compile_features(bdf PUBLIC c_std_11)
 set_target_properties(bdf PROPERTIES
