@@ -1,0 +1,130 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      fuzz-minutes:
+        description: "Minutes to fuzz each target with libFuzzer and go test -fuzz (0 skips the fuzz job)"
+        default: "0"
+
+jobs:
+  # Build and the unit tests on every platform the library is meant for,
+  # against the sources and against the single-header form.
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: ubuntu-gcc, os: ubuntu-latest, cc: gcc }
+          - { name: ubuntu-clang, os: ubuntu-latest, cc: clang }
+          - { name: macos, os: macos-latest, cc: clang }
+          - { name: windows-msvc, os: windows-latest, cc: "" }
+    env:
+      CC: ${{ matrix.cc }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install
+        run: cmake --install build --config Release --prefix "${{ runner.temp }}/prefix"
+      - uses: actions/upload-artifact@v7
+        if: matrix.name == 'ubuntu-clang'
+        with:
+          name: bdf-single-header
+          path: build/single/bdf/bdf.h
+
+  # The shared library, and the install rules a consumer sees.
+  shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBUILD_SHARED_LIBS=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+      - run: cmake --install build --prefix "${{ runner.temp }}/prefix"
+      - name: Check the installed package
+        run: |
+          ls -R "${{ runner.temp }}/prefix"
+          PKG_CONFIG_PATH="${{ runner.temp }}/prefix/lib/pkgconfig" pkg-config --cflags --libs bdf
+          test -f "${{ runner.temp }}/prefix/lib/cmake/bdf/bdfConfig.cmake"
+
+  # The unit tests once more under AddressSanitizer and UndefinedBehaviorSanitizer.
+  # Fuzzing is not run here (see the fuzz job): this replays what the tests
+  # already have, which takes seconds and catches most of what a fuzzer would.
+  sanitize:
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:check_initialization_order=1
+      UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v7
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBDF_WERROR=ON -DBDF_SANITIZE=address,undefined
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  # The differential tests against the Go reference implementation: every
+  # document and object of bdf's testdata through both readers, with the C
+  # side under ASan.
+  differential:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: go/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -asan ./...
+
+  # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
+  fuzz:
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.fuzz-minutes != '0'
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2"
+          cache-dependency-path: go/go.sum
+      - name: libFuzzer
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBDF_BUILD_FUZZ=ON -DBDF_SANITIZE=address,undefined -DBDF_BUILD_TESTS=OFF
+          cmake --build build
+          mkdir -p fuzz/findings
+          for t in object inflate manifest doc; do
+            mkdir -p "fuzz/corpus/$t"
+            "./build/fuzz/${t}_fuzz" "fuzz/corpus/$t" -max_total_time=$(( ${{ github.event.inputs.fuzz-minutes }} * 60 )) -artifact_prefix="fuzz/findings/$t-"
+          done
+      - name: go test -fuzz
+        working-directory: go
+        run: |
+          for t in FuzzObject FuzzInflate FuzzDoc; do
+            go test -run '^$' -fuzz "^$t\$" -fuzztime "${{ github.event.inputs.fuzz-minutes }}m" ./...
+          done
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz/findings/
+            go/testdata/fuzz/
+          if-no-files-found: ignore
