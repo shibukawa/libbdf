@@ -36,6 +36,14 @@ ORDER = [
     "unicode.c",
     "search.c",
     "crypto.c",
+    "rmath.c",
+    "rpath.c",
+    "rscan.c",
+    "rstroke.c",
+    "rsurface.c",
+    "rpaint.c",
+    "rdraw.c",
+    "render.c",
     "version.c",
 ]
 
@@ -46,9 +54,13 @@ COMMON = {"bdf/bdf.h", "bdf_internal.h"}
 SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 
 
+SEEN = set()
+
+
 def strip_local_includes(text: str) -> str:
     """Drops the includes of the common headers, and puts the other headers
-    of src/ (generated tables) in the place of their include."""
+    of src/ (generated tables, the internals of the rasterizer) in the place
+    of their first include."""
     out = []
     for line in text.splitlines():
         m = LOCAL_INCLUDE.match(line)
@@ -57,8 +69,11 @@ def strip_local_includes(text: str) -> str:
         elif m.group(1) in COMMON:
             continue
         elif (SRC / m.group(1)).is_file():
+            if m.group(1) in SEEN:
+                continue
+            SEEN.add(m.group(1))
             out.append(f"/* ---- src/{m.group(1)} ---- */")
-            out.append((SRC / m.group(1)).read_text(encoding="utf-8").rstrip("\n"))
+            out.append(strip_local_includes((SRC / m.group(1)).read_text(encoding="utf-8")).rstrip("\n"))
         else:
             out.append(line)
     return "\n".join(out) + "\n"

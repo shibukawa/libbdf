@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.6.0
+  VERSION 0.7.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -39,6 +39,14 @@ set(BDF_SOURCES
   src/unicode.c
   src/search.c
   src/crypto.c
+  src/rmath.c
+  src/rpath.c
+  src/rscan.c
+  src/rstroke.c
+  src/rsurface.c
+  src/rpaint.c
+  src/rdraw.c
+  src/render.c
   src/version.c)
 
 if(BDF_WITH_BROTLI)
@@ -73,6 +81,23 @@ if(BDF_BROTLI_INCLUDE)
   target_include_directories(bdf SYSTEM PRIVATE ${BDF_BROTLI_INCLUDE})
 endif()
 target_compile_features(bdf PUBLIC c_std_11)
+# The rasterizer takes square roots and remainders: the math library, where
+# it is one of its own.
+find_library(BDF_LIBM m)
+set(BDF_PC_LIBS_PRIVATE "")
+if(BDF_LIBM)
+  target_link_libraries(bdf PRIVATE ${BDF_LIBM})
+  set(BDF_PC_LIBS_PRIVATE "-lm")
+endif()
+# Its arithmetic must not be fused (src/raster_internal.h says why, and
+# turns it off itself where a compiler has a pragma for that).
+if(NOT MSVC)
+  include(CheckCCompilerFlag)
+  check_c_compiler_flag(-ffp-contract=off BDF_HAS_FP_CONTRACT_OFF)
+  if(BDF_HAS_FP_CONTRACT_OFF)
+    target_compile_options(bdf PRIVATE -ffp-contract=off)
+  endif()
+endif()
 set_target_properties(bdf PROPERTIES
   C_VISIBILITY_PRESET hidden
   VERSION ${PROJECT_VERSION}
@@ -101,7 +126,7 @@ if(Python3_Interpreter_FOUND)
   set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
   add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
-    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/unicode_nfc.h src/unicode_fold.h include/bdf/bdf.h tools/amalgamate.py
+    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/raster_internal.h src/unicode_nfc.h src/unicode_fold.h include/bdf/bdf.h tools/amalgamate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating the single-header bdf.h"
     VERBATIM)
@@ -119,6 +144,9 @@ if(BDF_BUILD_FUZZ)
   # A document may ask for ten million iterations of its key derivation:
   # seconds for each input.
   target_compile_definitions(bdf PRIVATE BDF_MAX_KDF_ITERATIONS=2048)
+  # So do objects drawn again and again by a renderer, and shadows blurred
+  # over a thousand pixels.
+  target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_DRAWN=65536 BDF_MAX_SHADOW_BLUR=16)
   add_subdirectory(fuzz)
 endif()
 

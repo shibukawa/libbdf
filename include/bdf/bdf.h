@@ -44,9 +44,9 @@ extern "C" {
 #endif
 
 #define BDF_VERSION_MAJOR  0
-#define BDF_VERSION_MINOR  6
+#define BDF_VERSION_MINOR  7
 #define BDF_VERSION_PATCH  0
-#define BDF_VERSION_STRING "0.6.0"
+#define BDF_VERSION_STRING "0.7.0"
 
 /* The wire format version and the instruction set (opset) this library reads. */
 #define BDF_FORMAT_VERSION 1
@@ -62,7 +62,8 @@ typedef enum bdf_status {
   BDF_ERR_NOMEM = 3,
   BDF_ERR_UNSUPPORTED = 4, /* well-formed, but beyond this build or this library: a WOFF2 font
                               without a Brotli decoder, a font collection, a WOFF 1.0 font */
-  BDF_ERR_PASSWORD = 5     /* the password, or the key, does not open the document */
+  BDF_ERR_PASSWORD = 5,    /* the password, or the key, does not open the document */
+  BDF_ERR_TOO_LARGE = 6    /* an image of more pixels than a renderer draws: ask for a smaller one */
 } bdf_status;
 
 /*
@@ -981,6 +982,82 @@ typedef struct bdf_text_hit_segment {
 
 BDF_API bdf_status bdf_text_hits_segment(const bdf_text_hits *hits, size_t i, size_t k,
                                          bdf_text_hit_segment *out);
+
+/* ---- Rendering ----------------------------------------------------------- */
+
+/*
+ * bdf_renderer draws the views of a document into images without a browser:
+ * the pages of fixed and flow views, stretches of scroll views and regions
+ * of sheets, for thumbnails, previews and prints. It is a port of the
+ * reference implementation's raster/imagebdf, and draws the same pixels: a
+ * software rasterizer that runs the instructions of the objects as a Canvas
+ * 2D would (anti-aliased paths, strokes with joins, caps and dashes, clips,
+ * gradients, groups with their alpha and blend mode, soft masks, shadows).
+ * What it leaves out it warns of (bdf_renderer_warning).
+ *
+ * A renderer keeps what it decodes for the next drawing. It is not to be
+ * used from two threads at a time; the document must outlive it.
+ */
+typedef struct bdf_renderer bdf_renderer;
+
+typedef struct bdf_render_options {
+  /* The colour behind the content, 0xRRGGBBAA, when has_background: else
+   * white for pages and regions, and nothing for bdf_render_object. A
+   * background of 0 is a transparent page. */
+  int has_background;
+  uint32_t background;
+} bdf_render_options;
+
+BDF_API bdf_status bdf_renderer_new(const bdf_doc *doc, const bdf_render_options *opts,
+                                    bdf_renderer **out, bdf_error *err);
+BDF_API void bdf_renderer_free(bdf_renderer *renderer);
+
+/* An image a renderer drew: 4 bytes a pixel, red, green, blue and alpha,
+ * the colours multiplied by the alpha, rows from the top without padding. */
+typedef struct bdf_image {
+  int width, height;
+  int x, y;        /* bdf_render_object: where the first pixel lies from the origin of the object */
+  uint8_t *pixels; /* width × height × 4 bytes; free the image with bdf_image_free */
+} bdf_image;
+
+BDF_API void bdf_image_free(bdf_image *image);
+
+/* The most pixels of an image a renderer draws (a canvas takes 16 bytes a
+ * pixel while it is drawn): a larger one is BDF_ERR_TOO_LARGE. */
+#define BDF_MAX_RENDER_PIXELS (64 << 20)
+
+/* bdf_render_page draws a whole page of a fixed or flow view (or a strip of
+ * a scroll view) at scale device pixels per unit. The units of a page are
+ * points, so a scale of dpi / 72 draws at dpi pixels per inch. */
+BDF_API bdf_status bdf_render_page(bdf_renderer *renderer, size_t view, size_t page, double scale,
+                                   bdf_image *out, bdf_error *err);
+/* bdf_render_page_size draws a whole page into exactly w × h pixels,
+ * stretched when they have another aspect ratio. */
+BDF_API bdf_status bdf_render_page_size(bdf_renderer *renderer, size_t view, size_t page, int w,
+                                        int h, bdf_image *out, bdf_error *err);
+/*
+ * bdf_render_region draws a rectangle (x, y, w, h in units) of a view into
+ * a w × h image: of a page of a fixed or flow view, of the continuous
+ * layout of a scroll view (its strips stacked, in units from the top), or
+ * of a sheet (page is ignored in the last two).
+ */
+BDF_API bdf_status bdf_render_region(bdf_renderer *renderer, size_t view, size_t page,
+                                     const float region[4], int w, int h, bdf_image *out,
+                                     bdf_error *err);
+/* bdf_sheet_size is the size of a sheet in units, from its rows and columns. */
+BDF_API void bdf_sheet_size(const bdf_doc *doc, size_t view, double *w, double *h);
+/*
+ * bdf_render_object draws an object that needs no other part (a formula
+ * laid out as paths) at scale device pixels per unit. The image holds the
+ * bounding box of the object grown to whole pixels; x and y say where its
+ * first pixel lies from where the origin of the object is drawn.
+ */
+BDF_API bdf_status bdf_render_object(const bdf_object *obj, double scale,
+                                     const bdf_render_options *opts, bdf_image *out,
+                                     bdf_error *err);
+/* What could not be drawn as the viewer would draw it, each once. */
+BDF_API size_t bdf_renderer_warning_count(const bdf_renderer *renderer);
+BDF_API const char *bdf_renderer_warning(const bdf_renderer *renderer, size_t i);
 
 /* ---- Cue index (spec §4.4) ---------------------------------------------- */
 

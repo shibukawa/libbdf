@@ -1,5 +1,5 @@
-set(BDF_TESTS object header inflate manifest doc font text search unlock)
-set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock search)
+set(BDF_TESTS object header inflate manifest doc font text search unlock render)
+set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock search render)
 
 if(MSVC)
   set(BDF_TEST_WARNINGS /W4)

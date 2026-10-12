@@ -1,12 +1,17 @@
 // Command genvectors writes the vectors of the C tests that need a writer
 // or a second implementation to make: encrypted documents and segments
-// written by the reference (tests/unlock_vectors.h), and inputs with the
-// answers of Go's standard library and x/text (tests/crypto_vectors.h).
+// written by the reference (tests/unlock_vectors.h), inputs with the
+// answers of Go's standard library and x/text (tests/crypto_vectors.h), and
+// drawings with what the reference's renderer makes of them
+// (tests/render_vectors.h).
 //
-//	go run -C go ./genvectors ../tests
+//	go run -C go ./genvectors ../tests [unlock] [crypto] [render]
 //
-// The documents are sealed with fresh random salts and nonces, so the bytes
-// of unlock_vectors.h differ from run to run.
+// Without names it writes them all. The documents of unlock are sealed with
+// fresh random salts and nonces, so its bytes differ from run to run. The
+// pictures of render are those of the reference where it computes without
+// fused multiply-adds, which libbdf draws on every platform: write them with
+// GOARCH=amd64 (on an Apple silicon Mac, CGO_ENABLED=1 as well).
 package main
 
 import (
@@ -20,12 +25,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"image"
+	"image/color"
 	"log"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/shibukawa/bdf"
+	"github.com/shibukawa/bdf/raster/imagebdf"
+	cbdf "github.com/shibukawa/libbdf/go"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -309,10 +320,117 @@ func cryptoVectors(path string) {
 	o.write(path, "inputs of the primitives with the answers of Go's standard\n * library and of golang.org/x/text/unicode/norm.")
 }
 
-func main() {
-	if len(os.Args) != 2 {
-		log.Fatal("usage: genvectors <tests directory>")
+// fnv is the hash the C tests take of an image (FNV-1a, 64 bits).
+func fnv(data []byte) uint64 {
+	h := uint64(14695981039346656037)
+	for _, b := range data {
+		h = (h ^ uint64(b)) * 1099511628211
 	}
-	unlockVectors(filepath.Join(os.Args[1], "unlock_vectors.h"))
-	cryptoVectors(filepath.Join(os.Args[1], "crypto_vectors.h"))
+	return h
+}
+
+func renderVectors(path string) {
+	if runtime.GOARCH != "amd64" {
+		log.Fatal("the pictures of render are those of amd64: run with GOARCH=amd64 CGO_ENABLED=1")
+	}
+	var o out
+	r := rand.New(rand.NewPCG(20261013, 99))
+	// objects that stand alone
+	const objects = 24
+	fmt.Fprintf(&o.b, "#define RV_OBJECTS %d\n", objects)
+	var all []byte
+	var rows []string
+	scales := []float64{1, 0.5, 1.5, 2.25}
+	for i := range objects {
+		obj := cbdf.RandomDrawing(r, nil)
+		scale := scales[i%len(scales)]
+		opts := &imagebdf.Options{}
+		has, bg := 0, uint32(0)
+		switch i % 3 {
+		case 1:
+			opts.Background, has, bg = color.White, 1, 0xffffffff
+		case 2:
+			opts.Background, has, bg = color.NRGBA{0x20, 0x40, 0x80, 0xff}, 1, 0x204080ff
+		}
+		img := must(imagebdf.Object(obj, scale, opts))
+		data := obj.Encode()
+		rows = append(rows, fmt.Sprintf("    {%d, %d, %v, %d, 0x%08xu, %d, %d, %d, %d, 0x%016xull},", len(all), len(data), scale, has, bg,
+			img.Rect.Dx(), img.Rect.Dy(), img.Rect.Min.X, img.Rect.Min.Y, fnv(img.Pix)))
+		all = append(all, data...)
+	}
+	o.comment("random drawings one after the other, and for each: where it starts and how long it is, the scale,\n * the background (whether, and which), and what the reference draws: the size, the place, the hash of the pixels")
+	o.bytes("rv_objects", all)
+	o.b.WriteString("static const struct {\n  size_t off, len;\n  double scale;\n  int has_background;\n  uint32_t background;\n  int w, h, x, y;\n  uint64_t hash;\n} rv_object[RV_OBJECTS] = {\n" + strings.Join(rows, "\n") + "\n};\n\n")
+
+	// a document: pages of objects that draw each other, strips, a sheet
+	var doc *bdf.Document
+	var file bytes.Buffer
+	for {
+		doc = cbdf.RandomDocument(r)
+		file.Reset()
+		if err := doc.WriteSingle(&file); err != nil {
+			log.Fatal(err)
+		}
+		if file.Len() < 24<<10 && len(doc.Views[2].Tiles) >= 3 && len(doc.Views[0].Pages) >= 2 && len(doc.Views[1].Pages) >= 3 {
+			break
+		}
+	}
+	read := must(must(bdf.OpenSingle(bytes.NewReader(file.Bytes()), int64(file.Len()))).ToDocument())
+	ref := imagebdf.New(read, nil)
+	o.comment("a random document")
+	o.bytes("rv_document", file.Bytes())
+	rows = nil
+	draw := func(view, page int, scale float64, region bdf.Rect, w, h int) {
+		var img *image.RGBA
+		if scale > 0 {
+			img = must(ref.Page(read.Views[view], page, scale))
+		} else {
+			img = must(ref.Region(read.Views[view], page, region, w, h))
+		}
+		rows = append(rows, fmt.Sprintf("    {%d, %d, %v, {%v, %v, %v, %v}, %d, %d, 0x%016xull},", view, page, scale,
+			region.X, region.Y, region.W, region.H, img.Rect.Dx(), img.Rect.Dy(), fnv(img.Pix)))
+	}
+	for vi, v := range read.Views {
+		switch v.Kind {
+		case bdf.ViewSheet:
+			draw(vi, 0, 0, bdf.Rect{X: 0, Y: 0, W: 300, H: 200}, 300, 200)
+			draw(vi, 0, 0, bdf.Rect{X: 37.5, Y: 12.25, W: 211, H: 97}, 173, 140)
+			draw(vi, 0, 0, bdf.Rect{X: -20, Y: -10, W: 700, H: 500}, 210, 150)
+		case bdf.ViewScroll:
+			draw(vi, 0, 0, bdf.Rect{X: 0, Y: 0, W: 200, H: 300}, 200, 300)
+			draw(vi, 0, 0, bdf.Rect{X: 10, Y: 40, W: 150, H: 220}, 111, 190)
+			draw(vi, 0, 1, bdf.Rect{}, 0, 0)
+		default:
+			for pi := range v.Pages {
+				draw(vi, pi, []float64{1, 0.6, 1.75}[pi%3], bdf.Rect{}, 0, 0)
+				draw(vi, pi, 0, bdf.Rect{X: 13, Y: 7.5, W: 90, H: 71}, 135, 99)
+			}
+		}
+	}
+	fmt.Fprintf(&o.b, "#define RV_RENDERS %d\n", len(rows))
+	o.comment("what the reference draws of it: the view and the page, then either the scale of the whole page (and the\n * size that comes of it), or 0 and the region with the size it is drawn into; and the hash of the pixels")
+	o.b.WriteString("static const struct {\n  size_t view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_render[RV_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
+	o.write(path, "random drawings and a random document with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		log.Fatal("usage: genvectors <tests directory> [unlock] [crypto] [render]")
+	}
+	which := os.Args[2:]
+	if len(which) == 0 {
+		which = []string{"unlock", "crypto", "render"}
+	}
+	for _, name := range which {
+		switch name {
+		case "unlock":
+			unlockVectors(filepath.Join(os.Args[1], "unlock_vectors.h"))
+		case "crypto":
+			cryptoVectors(filepath.Join(os.Args[1], "crypto_vectors.h"))
+		case "render":
+			renderVectors(filepath.Join(os.Args[1], "render_vectors.h"))
+		default:
+			log.Fatalf("no vectors named %q", name)
+		}
+	}
 }
