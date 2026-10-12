@@ -201,6 +201,7 @@ if(BDF_INSTALL)
   # relative of it is kept)
   set(BDF_PC_ROOT "${CMAKE_CURRENT_BINARY_DIR}/prefix")
   file(RELATIVE_PATH BDF_PC_PREFIX "${BDF_PC_ROOT}/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "${BDF_PC_ROOT}")
+  string(REGEX REPLACE "/+$" "" BDF_PC_PREFIX "${BDF_PC_PREFIX}")
   configure_file(cmake/bdf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
