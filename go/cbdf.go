@@ -6,6 +6,7 @@ package cbdf
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../include -I${SRCDIR}/../src -I${SRCDIR}/../third_party/brotli/include -I${SRCDIR}/../third_party/brotli/dec -I${SRCDIR}/../third_party/brotli/common -std=c11 -Wall -Wextra
+#cgo LDFLAGS: -lm
 #include <stdlib.h>
 #include "bdf/bdf.h"
 
