@@ -1334,6 +1334,15 @@ static void bdfi_draw_instr(bdfi_drawer *d, const bdf_instr *in) {
 #undef U
 }
 
+/* One instruction of an object run on a drawer, for a caller that goes
+ * through the instructions itself (rcanvas.c: the content of a soft mask). */
+void bdfi_drawer_instr(bdfi_drawer *d, bdfi_robj *o, const bdf_instr *in) {
+  bdfi_robj *prev = d->obj;
+  d->obj = o;
+  bdfi_draw_instr(d, in);
+  d->obj = prev;
+}
+
 static void bdfi_draw_run(bdfi_drawer *d, bdfi_robj *o) {
   if (d->depth > BDF_MAX_USE_DEPTH) {
     bdfi_r_warn(d->r, "objects nested too deep");

@@ -53,6 +53,7 @@ ORDER = [
     "sfnt.c",
     "fontdb.c",
     "rtext.c",
+    "rcanvas.c",
     "rdraw.c",
     "render.c",
     "version.c",

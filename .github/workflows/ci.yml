@@ -60,6 +60,32 @@ jobs:
           PKG_CONFIG_PATH="${{ runner.temp }}/prefix/lib/pkgconfig" pkg-config --cflags --libs bdf
           test -f "${{ runner.temp }}/prefix/lib/cmake/bdf/bdfConfig.cmake"
 
+  # The adapters, each where its library is: built with the warnings of the
+  # library, and compared with the rasterizer on the pages built into its
+  # comparison program (ctest adapter-<name>).
+  adapters:
+    name: adapter-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: cairo, os: ubuntu-latest, packages: libcairo2-dev, flags: "-DBDF_CAIRO=ON" }
+          - { name: coregraphics, os: macos-latest, packages: "", flags: "-DBDF_COREGRAPHICS=ON" }
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install what the adapter draws with
+        if: matrix.packages != ''
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ${{ matrix.packages }}
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON ${{ matrix.flags }}
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
+      - name: Check the installed package
+        run: |
+          cmake --install build --prefix "${{ runner.temp }}/prefix"
+          test -f "${{ runner.temp }}/prefix/include/bdf/bdf_${{ matrix.name }}.h"
+          test -f "${{ runner.temp }}/prefix/lib/libbdf_${{ matrix.name }}.a"
+
   # The unit tests once more under AddressSanitizer and UndefinedBehaviorSanitizer.
   # Fuzzing is not run here (see the fuzz job): this replays what the tests
   # already have, which takes seconds and catches most of what a fuzzer would.

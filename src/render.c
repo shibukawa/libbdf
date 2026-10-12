@@ -314,6 +314,7 @@ bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
   }
   p->used = r->drawing;
   p->part = part;
+  p->serial = ++r->pictures;
   r->kept[r->nkept++] = p;
   r->pixels += (int64_t)p->w * p->h;
   o->pic = p;
