@@ -534,7 +534,9 @@ static bdf_status bdfi_view_add(bdfi_view_walk *w, uint32_t a, uint32_t b, const
   size_t kept = 0, n = bdf_text_run_count(text);
   for (size_t i = 0; i < n; i++) {
     bdf_text_run tr;
-    bdf_text_run_at(text, i, &tr);
+    if (bdf_text_run_at(text, i, &tr) != BDF_OK) {
+      continue;
+    }
     /* in a sheet, a tile keeps the runs whose anchor lies in it: tiles
      * repeat what straddles them (spec §4.1) */
     if (w->sheet && !(tr.x >= 0 && tr.x < w->tile && tr.y >= 0 && tr.y < w->tile)) {
@@ -621,7 +623,11 @@ static bdf_status bdfi_view_extract(const bdf_doc *doc, size_t view, const bdf_v
     }
     for (size_t i = 0; i < n; i++) {
       bdf_tile t;
-      bdf_doc_tile(doc, view, i, &t);
+      if (bdf_doc_tile(doc, view, i, &t) != BDF_OK) {
+        st = BDF_ERR_ARG;
+        bdfi_error_set(err, st, 0, "bad argument");
+        goto done;
+      }
       size_t kx = bdfi_tile_number(t.key, t.key_len, &tiles[i].x);
       size_t ky = 0;
       if (kx > 0 && kx < t.key_len && t.key[kx] == ',') {
@@ -638,8 +644,8 @@ static bdf_status bdfi_view_extract(const bdf_doc *doc, size_t view, const bdf_v
     for (size_t i = 0; i < n; i++) {
       bdf_tile t;
       uint8_t hash[16];
-      bdf_doc_tile(doc, view, tiles[i].index, &t);
-      if (bdf_hash_parse(t.obj, t.obj_len, hash) != BDF_OK) {
+      if (bdf_doc_tile(doc, view, tiles[i].index, &t) != BDF_OK ||
+          bdf_hash_parse(t.obj, t.obj_len, hash) != BDF_OK) {
         st = BDF_ERR_FORMAT;
         bdfi_error_set(err, st, 0, "bad part name");
         goto done;
@@ -652,10 +658,14 @@ static bdf_status bdfi_view_extract(const bdf_doc *doc, size_t view, const bdf_v
   } else {
     for (size_t pi = 0; pi < v->npages; pi++) {
       bdf_page page;
-      bdf_doc_page(doc, view, pi, &page);
+      if (bdf_doc_page(doc, view, pi, &page) != BDF_OK) {
+        break;
+      }
       for (size_t li = 0; li < page.nlayers; li++) {
         bdf_layer layer;
-        bdf_doc_layer(doc, view, pi, li, &layer);
+        if (bdf_doc_layer(doc, view, pi, li, &layer) != BDF_OK) {
+          break;
+        }
         st = bdfi_view_add(&w, (uint32_t)pi, (uint32_t)li, layer.obj, err);
         if (st != BDF_OK) {
           goto done;
@@ -868,12 +878,16 @@ bdf_status bdf_doc_search_text(const bdf_doc *doc, bdf_search_text **out, bdf_er
   int has_flow = 0;
   for (size_t i = 0; i < nviews; i++) {
     bdf_view v;
-    bdf_doc_view(doc, i, &v);
+    if (bdf_doc_view(doc, i, &v) != BDF_OK) {
+      continue;
+    }
     has_flow = has_flow || (v.kind_len == 4 && memcmp(v.kind, "flow", 4) == 0);
   }
   for (size_t i = 0; i < nviews; i++) {
     bdf_view v;
-    bdf_doc_view(doc, i, &v);
+    if (bdf_doc_view(doc, i, &v) != BDF_OK) {
+      continue;
+    }
     if (has_flow && v.kind_len == 6 && memcmp(v.kind, "scroll", 6) == 0) {
       continue; /* the same text as the flow view, laid out the other way */
     }
