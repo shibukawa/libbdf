@@ -177,9 +177,15 @@ func mutate(rng *rand.Rand, src []byte) []byte {
 	return b
 }
 
+// envInt is a number of the environment, or def: how many cases a test
+// runs, or its seed. With -short (the run under AddressSanitizer in the CI,
+// which takes ten times as long) there is an eighth of the cases.
 func envInt(name string, def int) int {
 	if v, err := strconv.Atoi(os.Getenv(name)); err == nil {
 		return v
+	}
+	if testing.Short() && !strings.HasSuffix(name, "_SEED") {
+		return max(def/8, 1)
 	}
 	return def
 }
