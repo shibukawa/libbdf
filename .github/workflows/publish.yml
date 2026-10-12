@@ -1,0 +1,32 @@
+
+  # The conformance suite (package conformance): the inputs other readers
+  # check themselves with, attached to the release of the tag.
+  conformance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.2" # the patch with the fix of GO-2026-6617 and GO-2026-6612/6613, which the runner's cache lacks
+
+      - name: write the conformance suite
+        run: |
+          go run ./cmd/bdf conformance -testdata testdata bdf-conformance
+          tar czf "bdf-conformance-${GITHUB_REF_NAME}.tar.gz" bdf-conformance
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bdf-conformance
+          path: bdf-conformance-*.tar.gz
+
+      - name: attach it to the release of the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # the release of the tag, or a draft one to publish by hand when there is none yet
+          gh release upload "$GITHUB_REF_NAME" "bdf-conformance-${GITHUB_REF_NAME}.tar.gz" --clobber ||
+            gh release create "$GITHUB_REF_NAME" "bdf-conformance-${GITHUB_REF_NAME}.tar.gz" --draft --generate-notes

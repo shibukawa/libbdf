@@ -1,0 +1,111 @@
+cmake_minimum_required(VERSION 3.21)
+
+project(bdf
+  VERSION 0.2.0
+  DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
+  HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
+  LANGUAGES C)
+
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+option(BDF_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
+option(BDF_BUILD_FUZZ "Build the libFuzzer harnesses (clang only)" OFF)
+option(BDF_WERROR "Treat warnings as errors" OFF)
+option(BDF_INSTALL "Generate the install rules" ${PROJECT_IS_TOP_LEVEL})
+set(BDF_SANITIZE "" CACHE STRING "Sanitizers to build everything with, e.g. address,undefined")
+set(BDF_CONFORMANCE_DIR "" CACHE PATH "A conformance suite written by `bdf conformance`, run by ctest")
+
+if(BDF_SANITIZE)
+  add_compile_options(-fsanitize=${BDF_SANITIZE} -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=${BDF_SANITIZE})
+endif()
+
+# The sources, in the order tools/amalgamate.py joins them.
+set(BDF_SOURCES
+  src/reader.c
+  src/object.c
+  src/container.c
+  src/inflate.c
+  src/json.c
+  src/manifest.c
+  src/doc.c
+  src/version.c)
+
+add_library(bdf ${BDF_SOURCES})
+add_library(bdf::bdf ALIAS bdf)
+
+target_include_directories(bdf PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_compile_features(bdf PUBLIC c_std_11)
+set_target_properties(bdf PROPERTIES
+  C_VISIBILITY_PRESET hidden
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR}
+  OUTPUT_NAME bdf
+  PUBLIC_HEADER include/bdf/bdf.h)
+target_compile_definitions(bdf PRIVATE BDF_BUILDING)
+if(BUILD_SHARED_LIBS)
+  target_compile_definitions(bdf PUBLIC BDF_SHARED)
+endif()
+
+if(MSVC)
+  set(BDF_WARNINGS /W4 $<$<BOOL:${BDF_WERROR}>:/WX>)
+else()
+  set(BDF_WARNINGS
+    -Wall -Wextra -Wpedantic -Wshadow -Wvla -Wcast-qual -Wstrict-prototypes
+    $<$<BOOL:${BDF_WERROR}>:-Werror>)
+endif()
+target_compile_options(bdf PRIVATE ${BDF_WARNINGS})
+
+# The single-header form: generated from the same sources, and tested
+# alongside them when Python is at hand.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  set(BDF_SINGLE_HEADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/single)
+  set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
+  add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
+    COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
+    DEPENDS ${BDF_SOURCES} src/bdf_internal.h include/bdf/bdf.h tools/amalgamate.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating the single-header bdf.h"
+    VERBATIM)
+  add_custom_target(bdf_single_header DEPENDS ${BDF_SINGLE_HEADER})
+else()
+  message(STATUS "Python 3 not found: the single-header form is not generated or tested")
+endif()
+
+if(BDF_BUILD_FUZZ)
+  # The library itself carries the coverage instrumentation the fuzzer steers by.
+  target_compile_options(bdf PRIVATE -fsanitize=fuzzer-no-link)
+  add_subdirectory(fuzz)
+endif()
+
+if(BDF_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
+
+if(BDF_INSTALL)
+  install(TARGETS bdf EXPORT bdfTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    PUBLIC_HEADER DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/bdf)
+  install(EXPORT bdfTargets
+    NAMESPACE bdf::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bdf)
+  configure_package_config_file(cmake/bdfConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/bdfConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bdf)
+  write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/bdfConfigVersion.cmake
+    COMPATIBILITY SameMajorVersion)
+  install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/bdfConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/bdfConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bdf)
+  configure_file(cmake/bdf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc @ONLY)
+  install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+endif()

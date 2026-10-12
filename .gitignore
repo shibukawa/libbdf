@@ -1,0 +1,19 @@
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+compile_commands.json
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+.DS_Store
+# fuzz/corpus/<target>/ is the working corpus a fuzzer grows: local only.
+# What it finds goes to fuzz/regress/<target>/ (C) or go/testdata/fuzz/ (Go)
+# by hand, where the tests replay it.
+/fuzz/corpus/*/
+crash-*
+leak-*
+timeout-*
