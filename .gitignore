@@ -17,3 +17,5 @@ compile_commands.json
 crash-*
 leak-*
 timeout-*
+/.build/
+/.swiftpm/
