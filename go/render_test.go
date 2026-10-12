@@ -59,6 +59,8 @@ func renderSeed(t *testing.T) (cases int, r *rand.Rand) {
 	cases, seed := 300, uint64(7)
 	if n, err := strconv.Atoi(os.Getenv("LIBBDF_RENDER_CASES")); err == nil && n > 0 {
 		cases = n
+	} else if testing.Short() {
+		cases /= 4 // (under AddressSanitizer in the CI)
 	}
 	if n, err := strconv.ParseUint(os.Getenv("LIBBDF_RENDER_SEED"), 10, 64); err == nil {
 		seed = n
