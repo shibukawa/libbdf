@@ -1,0 +1,87 @@
+name: release
+
+# A tag v<version> makes a draft release with what packaging/README.md
+# lists: the single header, the binaries of each platform, the xcframework
+# and the NuGet packages. Dispatched by hand, it builds the same and leaves
+# it as artifacts of the run, without a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  single-header:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - run: python3 tools/amalgamate.py -o dist/bdf.h
+      - uses: actions/upload-artifact@v7
+        with:
+          name: single-header
+          path: dist/bdf.h
+
+  binaries:
+    name: binaries-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { platform: linux-x64, os: ubuntu-latest }
+          - { platform: macos-universal, os: macos-latest }
+          - { platform: windows-x64, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/binaries.sh ${{ matrix.platform }} "$RUNNER_TEMP/binaries"
+        shell: bash
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/binaries/bdf-*.tar.gz
+            ${{ runner.temp }}/binaries/bdf-*.zip
+
+  xcframework:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: |
+          packaging/xcframework.sh "$RUNNER_TEMP/xcframework"
+          cd "$RUNNER_TEMP/xcframework"
+          ditto -c -k --keepParent bdf.xcframework bdf.xcframework.zip
+          # what a binaryTarget of a Swift package names
+          swift package compute-checksum bdf.xcframework.zip | tee bdf.xcframework.zip.checksum
+      - uses: actions/upload-artifact@v7
+        with:
+          name: xcframework
+          path: |
+            ${{ runner.temp }}/xcframework/bdf.xcframework.zip
+            ${{ runner.temp }}/xcframework/bdf.xcframework.zip.checksum
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [single-header, binaries, xcframework]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: The tag is the version the header states
+        run: |
+          version=$(sed -n 's/^#define BDF_VERSION_STRING *"\(.*\)"/\1/p' include/bdf/bdf.h)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "the tag is $GITHUB_REF_NAME, the header says $version"; exit 1; }
+      - name: Fetch what the other jobs built
+        run: gh run download "$GITHUB_RUN_ID" --dir "$RUNNER_TEMP/dist"
+      - name: Draft the release
+        run: |
+          find "$RUNNER_TEMP/dist" -type f | sort
+          gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes \
+            $(find "$RUNNER_TEMP/dist" -type f | sort)

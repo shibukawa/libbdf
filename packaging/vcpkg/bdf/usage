@@ -1,0 +1,4 @@
+bdf provides CMake targets:
+
+  find_package(bdf CONFIG REQUIRED)
+  target_link_libraries(main PRIVATE bdf::bdf)

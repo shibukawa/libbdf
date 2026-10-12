@@ -108,6 +108,91 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure -R '^(canvas|adapter-)'
 
+  # The ways the library reaches other builds (packaging/README.md): a
+  # consumer built through each of them.
+  packaging:
+    runs-on: ubuntu-latest
+    env:
+      PREFIX: ${{ runner.temp }}/prefix
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_BUILD_TESTS=OFF
+          cmake --build build
+          cmake --install build --prefix "$PREFIX"
+      - name: CMake package
+        run: |
+          cmake -S packaging/consumer -B "$RUNNER_TEMP/consumer" -DCMAKE_PREFIX_PATH="$PREFIX"
+          cmake --build "$RUNNER_TEMP/consumer"
+          "$RUNNER_TEMP/consumer/consumer"
+      - name: pkg-config
+        run: |
+          export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
+          cc packaging/consumer/main.c $(pkg-config --cflags --libs --static bdf) -o "$RUNNER_TEMP/consumer-pc"
+          "$RUNNER_TEMP/consumer-pc"
+      - name: Conan
+        run: |
+          pipx install conan
+          conan profile detect
+          conan create . --test-folder=packaging/conan/test_package
+      - name: vcpkg
+        env:
+          BDF_VCPKG_SOURCE: ${{ github.workspace }}
+          VCPKG_KEEP_ENV_VARS: BDF_VCPKG_SOURCE
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install bdf --overlay-ports=packaging/vcpkg
+          cmake -S packaging/consumer -B "$RUNNER_TEMP/consumer-vcpkg" \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build "$RUNNER_TEMP/consumer-vcpkg"
+          "$RUNNER_TEMP/consumer-vcpkg/consumer"
+      - name: Meson
+        run: |
+          pipx install meson
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+          mkdir -p packaging/meson/test/subprojects
+          cp packaging/meson/bdf.wrap packaging/meson/test/subprojects/
+          # the subproject is this checkout, not the release the wrap names
+          ln -s "$GITHUB_WORKSPACE" packaging/meson/test/subprojects/bdf
+          meson setup "$RUNNER_TEMP/meson" packaging/meson/test
+          meson test -C "$RUNNER_TEMP/meson" --print-errorlogs
+
+  # The binaries of a release, as the release workflow builds them.
+  packaging-binaries:
+    name: binaries-${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: linux-x64, os: ubuntu-latest }
+          - { platform: macos-universal, os: macos-latest }
+          - { platform: windows-x64, os: windows-latest }
+    steps:
+      - uses: actions/checkout@v7
+      - run: packaging/binaries.sh ${{ matrix.platform }} "$RUNNER_TEMP/binaries"
+        shell: bash
+      - name: A consumer of the tree
+        shell: bash
+        run: |
+          tree=$(echo "$RUNNER_TEMP"/binaries/bdf-*-${{ matrix.platform }})
+          ls -R "$tree" | head -60
+          cmake -S packaging/consumer -B "$RUNNER_TEMP/consumer" -DCMAKE_PREFIX_PATH="$tree"
+          cmake --build "$RUNNER_TEMP/consumer" --config Release
+          ctest --test-dir "$RUNNER_TEMP/consumer" -C Release --output-on-failure
+
+  # The Swift package and the xcframework.
+  packaging-apple:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: swift build
+      - run: swift test
+      - name: xcframework
+        run: |
+          packaging/xcframework.sh "$RUNNER_TEMP/xcframework"
+          ls -R "$RUNNER_TEMP/xcframework/bdf.xcframework" | head -40
+
   # The unit tests once more under AddressSanitizer and UndefinedBehaviorSanitizer.
   # Fuzzing is not run here (see the fuzz job): this replays what the tests
   # already have, which takes seconds and catches most of what a fuzzer would.
