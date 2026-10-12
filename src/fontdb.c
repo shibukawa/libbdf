@@ -93,6 +93,17 @@ typedef struct bdfi_fdb_src {
   FILE *fp;
 } bdfi_fdb_src;
 
+/* Opens a font file for reading. (Microsoft's compiler takes fopen for a
+ * mistake; the path is in the encoding of the C library either way.) */
+static FILE *bdfi_fdb_open(const char *path) {
+#ifdef _MSC_VER
+  FILE *fp = NULL;
+  return fopen_s(&fp, path, "rb") == 0 ? fp : NULL;
+#else
+  return fopen(path, "rb");
+#endif
+}
+
 /* ReadAt: n bytes at off, all of them or none. */
 static int bdfi_fdb_read_at(bdfi_fdb_src *s, uint64_t off, uint8_t *buf, size_t n) {
   if (s->mem) {
@@ -562,7 +573,7 @@ bdf_status bdf_fonts_add_file(bdf_fonts *fonts, const char *path, bdf_error *err
     return BDF_ERR_NOMEM;
   }
   memcpy(f.path, path, n + 1);
-  bdfi_fdb_src src = {NULL, 0, fopen(path, "rb")};
+  bdfi_fdb_src src = {NULL, 0, bdfi_fdb_open(path)};
   if (!src.fp) {
     free(f.path);
     bdfi_error_set(err, BDF_ERR_FORMAT, 0, "the font file cannot be opened");
@@ -979,7 +990,7 @@ BDF_INTERNAL int bdfi_fonts_read(const bdf_fonts *db, size_t face, const uint8_t
     *len = f->len;
     return 1;
   }
-  FILE *fp = fopen(f->path, "rb");
+  FILE *fp = bdfi_fdb_open(f->path);
   if (!fp) {
     return 0;
   }
@@ -1237,7 +1248,7 @@ BDF_INTERNAL int bdfi_fonts_cmap(const bdf_fonts *db, size_t face, const uint8_t
     *len = (size_t)e->cmap_len;
     return 1;
   }
-  FILE *fp = fopen(f->path, "rb");
+  FILE *fp = bdfi_fdb_open(f->path);
   if (!fp) {
     return 0;
   }
