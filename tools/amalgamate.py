@@ -34,6 +34,7 @@ ORDER = [
     "text.c",
     "index.c",
     "unicode.c",
+    "search.c",
     "crypto.c",
     "version.c",
 ]

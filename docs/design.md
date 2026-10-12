@@ -12,7 +12,8 @@ bdf（Go の参照実装と TypeScript のビューア）とは別に、ネイ�
 
 ```
 core      コンテナ（single/split）、manifest（自前の JSON）、Part、deflate-raw（自前）、
-          Object のデコード、WOFF2 → SFNT、テキスト run（選択・検索・リンク）、暗号化の開錠、区間
+          Object のデコード、WOFF2 → SFNT、テキスト run（選択・検索・リンク）、読み上げ用の構造、
+          正規化つきの検索、暗号化の開錠、区間
 raster    純粋な C のラスタライザ。bdf の raster/imagebdf の移植。FreeType で字形を取る
 adapters  core の命令列をフレームワークのキャンバスに流す薄い層
           skia/ (C++)  cairo/ (C)  qt/ (C++)  coregraphics/ (ObjC)
@@ -53,7 +54,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
 - **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
-- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock の 7 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
+- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock・search の 8 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
 
 cgo を選んで purego にしなかったのは、`go build -asan` が cgo にしか効かないことと、同じツリーの C ソースを静的に結合したかったからである。利用者向けに cgo なしの Go 束縛を出すなら、そのときは purego で別に作る。
 
@@ -111,7 +112,7 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 1. ~~コンテナと manifest（JSON）、Part の取得（single、split、コールバック）、deflate-raw、spec の上限。~~ 済み。
 2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI への組み込みは bdf の次のリリース後。
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
-4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。残りは読み上げ用の構造（MARK の見出し・リスト・表・図）と、正規化つきの検索。
+4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。読み上げ用の構造と正規化つきの検索も済み（§12）。
 5. ~~暗号化。~~ 済み。パスワードと ECDH の開錠、区間（§3.6）の合成。暗号の部品は自前（§11）。
 6. ラスタライザの移植と、bdf の golden との比較。
 7. アダプタ。最初は Skia（Chrome の Canvas 2D の実体なので TS 版との差が最も小さく、SkiaSharp 経由で MAUI もすぐ使える）。
@@ -143,3 +144,25 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 **開錠後の文書**。`bdf_doc_unlock` が成功すると、封印された manifest が文書の manifest になり、`bdf_doc_view` などはそれを返す。外側の manifest は Part を取りに行くためだけに残る。封印された manifest の `parts[]` が指す `sealed` が外側に無ければ開錠の時点で拒否する（参照実装は Part を読むときに気づくが、結果は同じ）。開錠は文書を書き換えるので、スレッド間で共有する前に済ませる。
 
 **区間（§3.6）**。区間の文書は形としては 1 つの文書で、全ページの枠を持ち、自分のページにだけレイヤがある。`bdf_doc_add_segment(doc, segment)` は、segment のページを doc の同じ位置に入れ、segment の Part を doc の検索対象に足す。先に来た区間が持つ Part（共有のフォントやマスター）は後の区間に入っていないので、Part は「自分、次に足された区間の順」で探す。所有権は doc に移り、`bdf_doc_free(doc)` がまとめて解放する。渡した文書をさらに別の文書へ足すこと、渡した文書に区間を足すことは `BDF_ERR_ARG` で断る（Part の通し番号がずれるのと、二重解放を防ぐため）。view の id とページ数が違う文書は「別の文書の区間」として拒否する。区間ごとに鍵が違ってよく、平文の文書に区間を足すこともできる。
+
+## 12. テキストの構造と検索（TS 実装が参照）
+
+読み上げ用の構造（§7.8 の「構造」）と正規化つきの検索は、bdf の Go 実装には無く、TypeScript のリーダー（`packages/core/src/text.ts` の `extractContent`、`search.ts` の `TextSearch`）だけが持つ。Go との差分テストが組めないので、**TS 実装を node で走らせて正解にする**。
+
+- `tools/structure-oracle.mjs` と `tools/search-oracle.mjs` が、ピン留めした bdf モジュールの testdata を TS 実装で読み、結果を `go/testdata/structure.txt.gz`（328 Object、4,157 ノード、図 178 個）と `search.txt.gz`（索引 168 本、2,594 クエリ、4,789 ヒット）に書く。`go test` はこれと libbdf を行単位で比べる。node も TS も要らないので CI で回る。
+- testdata は書き手が作る素直な入力しか持たない。`LIBBDF_BDF_CHECKOUT` に packages/core をビルド済みの bdf のチェックアウトを指定すると、`TestStructureRandom` と `TestSearchRandom` が乱数で作った Object と索引を両方に通して比べる（既定で 2 万件と 1 万件。手元では構造 30 万 Object・約 170 万ノード、検索 10 万索引・約 70 万ヒットまで一致を確認）。fuzz と同じく明示実行。
+- 検索の表 `src/unicode_fold.h`（約 61 KB）は、TS の `normalizeChar` に全コードポイントを聞いて作る（`tools/gen-search-tables.mjs`）。NFKC・小文字化・カタカナ→ひらがな・U+2212→`-` を自前で合成するのではなく関数の結果そのものを表にするので、ビューアと同じものが見つかることが作りから保証される。Unicode の版は生成に使った node のもの（17.0）。
+
+**構造**。ノードは開いた順の配列で、各ノードが親の番号を持つ。run とリンクは属するノードの番号を持つ。MARK の扱いは TS と同じ（葉の MARK は次の run の段落の種類を予約、構造の MARK はその場で効く、LIST の直下の run は暗黙の項目、TABLE の直下の run は caption、開いていない END は何もしない）。見出しのレベルは JavaScript の `Number()` が 1〜6 の整数と読むもの（`" 3 "`、`"3.0"`、`"0x3"`、`"30e-1"` も 3）。丸めて初めて整数になる 10 進数（`5.9999999999999999999999`）だけは TS と違ってレベルなしになる。
+
+**図の範囲はビット単位で TS と同じ**。TS は変換行列を倍精度で持ち、Go（と libbdf の run の位置）は単精度で持つ。図の範囲のためだけに倍精度の行列を並べて持ち、積和は `bdfi_muld`（volatile 経由）で FMA を禁じ、`Math.min` / `Math.max` の NaN と −0 の扱いも写した。結果は float に丸めて返す。ALT_TEXT を子 Object が描く場合の x は、TS が倍精度の和、Go が単精度の和で、図の範囲には前者を使う（乱数テストが見つけた 1 ulp の差）。図の中のテキストの幅は、字送りが無ければ「サイズ × UTF-16 の単位数 × 0.5」で、UTF-16 の長さはブラウザのデコーダと同じ数え方（不正なバイト列は最大部分列ごとに U+FFFD 1 つ、先頭の BOM は数えない）。
+
+**検索**。索引の run を 1 文字ずつ正規化して連結し、正規化後の各文字に「元の run と、その中のバイト位置」を持たせる（1 文字あたり 12 バイト）。ヒットの位置は run のテキストの**バイト**オフセットで返す（TS は UTF-16 の単位）。前後の文脈は文字数で数える（TS は UTF-16 の単位なので、BMP 外の文字を含む文脈だけ長さが違う）。1 文字ごとの正規化なので、結合文字で書いた「e + ◌́」と合成済みの「é」は互いに見つからない。これは TS と同じ挙動で、直すなら bdf 側が先。正規化後の長さは 2^26 文字で打ち切る（1 文字が最大 18 文字に展開されるため）。
+
+**上限**。ノードは 2^22 個まで（run、リンクと同じ）。開いた図は描画命令のたびに全部を広げるので、広げるのは内側 64 段までとし、それより深い図は大きさ 0 のままにする（TS に上限は無いが、数万段の入れ子と数百万の描画命令で二乗の時間がかかる）。
+
+**参照実装どうしの食い違い**（libbdf は Go に合わせた。どちらも書き手が作らない入力）:
+
+- SAVE / RESTORE がマスク（MASK_BEGIN〜MASK_END）の境界をまたぐ命令列。Go の `text.go` はマスクの中を丸ごと飛ばし、TS の `text.ts` はマスクの中の RESTORE も実行して MASK_END でもう 1 度戻す。マスクの後の run の位置が変わる。
+- 文字列の先頭の BOM。TS は `TextDecoder` が落とし、Go は残す。libbdf は文字列をそのまま返すが、検索と図の幅では TS と同じく無いものとして扱う。
+

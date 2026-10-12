@@ -44,9 +44,9 @@ extern "C" {
 #endif
 
 #define BDF_VERSION_MAJOR  0
-#define BDF_VERSION_MINOR  5
+#define BDF_VERSION_MINOR  6
 #define BDF_VERSION_PATCH  0
-#define BDF_VERSION_STRING "0.5.0"
+#define BDF_VERSION_STRING "0.6.0"
 
 /* The wire format version and the instruction set (opset) this library reads. */
 #define BDF_FORMAT_VERSION 1
@@ -717,10 +717,12 @@ enum { BDF_SEP_NONE = 0, BDF_SEP_SPACE = 1, BDF_SEP_BREAK = 2 };
 #endif
 
 /*
- * bdf_text holds the text runs and the links of an object and the objects it
- * draws, in walk order: what a text layer, a selection or a search needs.
- * The runs are those of the reference implementation's ExtractText, with
- * the same order, ordinals and separators.
+ * bdf_text holds the text runs, the links and the structure of an object and
+ * the objects it draws, in walk order: what a text layer, a selection, a
+ * search or a screen reader needs. The runs are those of the reference
+ * implementation's ExtractText, with the same order, ordinals and
+ * separators; the structure is that of its TypeScript reader
+ * (extractContent).
  */
 typedef struct bdf_text bdf_text;
 
@@ -750,6 +752,9 @@ typedef struct bdf_text_run {
   uint8_t sep;      /* BDF_SEP_*: the separator from the run before */
   int alt_text;     /* the text of an ALT_TEXT mark: nothing was drawn with it */
   uint32_t ordinal; /* the position in the walk; matches the text index part */
+  int64_t node;     /* the structure node the run belongs to (bdf_text_node_at) */
+  const char *lang; /* the language a MARK LANG set (BCP 47); "" for the document's */
+  size_t lang_len;
 } bdf_text_run;
 
 BDF_API size_t bdf_text_run_count(const bdf_text *text);
@@ -761,10 +766,51 @@ typedef struct bdf_text_link {
   const char *url; /* as written; see bdf_link_parse */
   size_t url_len;
   int64_t after; /* the index of the last run before the LINK, -1 before the first */
+  int64_t node;  /* the structure node open at the LINK, -1 at the top level */
 } bdf_text_link;
 
 BDF_API size_t bdf_text_link_count(const bdf_text *text);
 BDF_API bdf_status bdf_text_link_at(const bdf_text *text, size_t i, bdf_text_link *out);
+
+/*
+ * The structure the MARKs give the text (spec §7.8), for reading aloud.
+ * Leaves hold runs: a paragraph, a heading, the caption of a table, and a
+ * cell outside a table (a sheet's). Containers hold nodes: a list, an item,
+ * a table, a cell inside a table, a figure. Nodes are in the order they
+ * open, and each names its parent.
+ */
+typedef enum bdf_node_kind {
+  BDF_NODE_PARAGRAPH = 0,
+  BDF_NODE_HEADING = 1,
+  BDF_NODE_CAPTION = 2,
+  BDF_NODE_LIST = 3,
+  BDF_NODE_ITEM = 4,
+  BDF_NODE_TABLE = 5,
+  BDF_NODE_CELL = 6,
+  BDF_NODE_FIGURE = 7
+} bdf_node_kind;
+
+enum { BDF_SCOPE_NONE = 0, BDF_SCOPE_COL = 1, BDF_SCOPE_ROW = 2 };
+
+typedef struct bdf_text_node {
+  uint8_t kind;   /* BDF_NODE_* */
+  int64_t parent; /* the node around it, -1 at the top level */
+  uint8_t level;  /* a heading: 1 to 6, or 0 when its mark names no level */
+  /* a cell whose mark names a place: from 0, and how many rows and columns
+   * it spans; in a table from the table's first cell, else in the sheet */
+  int has_cell;
+  uint32_t row, col, rows, cols;
+  uint8_t scope;   /* BDF_SCOPE_*: a cell that heads its column or row */
+  const char *alt; /* a figure: what to read for it; "" for a decoration */
+  size_t alt_len;
+  /* a figure: the box around what it draws, clipped, in the space of the
+   * object; of no size, where the figure opens, when it draws nothing */
+  int has_bounds;
+  float x, y, w, h;
+} bdf_text_node;
+
+BDF_API size_t bdf_text_node_count(const bdf_text *text);
+BDF_API bdf_status bdf_text_node_at(const bdf_text *text, size_t i, bdf_text_node *out);
 
 /* What a LINK url may be (spec §7.7); a reader makes no link of anything else. */
 typedef enum bdf_link_kind {
@@ -866,6 +912,75 @@ BDF_API size_t bdf_search_text_view_count(const bdf_search_text *st);
 BDF_API bdf_status bdf_search_text_view(const bdf_search_text *st, size_t i, bdf_search_view *out);
 BDF_API bdf_status bdf_search_text_page(const bdf_search_text *st, size_t view, size_t i,
                                         bdf_search_page *out);
+
+/* ---- Search -------------------------------------------------------------- */
+
+/*
+ * bdf_text_search finds text in the runs of a text index (a view's part, or
+ * bdf_doc_view_text) the way the reference's viewer does: characters are
+ * taken for what they are to a reader (NFKC: full and half width, ligatures,
+ * circled and squared forms; katakana as hiragana; the minus sign as a
+ * hyphen; and, unless the search is case-sensitive, capitals as small
+ * letters), and a phrase is found across the runs of a line and across
+ * lines, but not across a paragraph break. Each character is normalised on
+ * its own, so a letter and a combining accent do not match the two written
+ * as one. The index must outlive the search.
+ */
+typedef struct bdf_text_search bdf_text_search;
+
+BDF_API bdf_status bdf_text_search_new(const bdf_text_index *index, int case_sensitive,
+                                       bdf_text_search **out, bdf_error *err);
+BDF_API void bdf_text_search_free(bdf_text_search *search);
+/* bdf_text_search_plain is the text that is searched: normalised, a space or
+ * a line break where a run's separator says so. NUL-terminated, in a buffer
+ * the caller frees with bdf_free. */
+BDF_API bdf_status bdf_text_search_plain(const bdf_text_search *search, char **out, size_t *out_len,
+                                         bdf_error *err);
+/* bdf_text_search_normalize is text as a search has it (a query before its
+ * white space is joined), in a buffer the caller frees with bdf_free. */
+BDF_API bdf_status bdf_text_search_normalize(const char *s, size_t len, int case_sensitive,
+                                             char **out, size_t *out_len, bdf_error *err);
+
+/* What the reference's viewer asks for: at most 1000 hits, 40 characters of
+ * context on each side. */
+#define BDF_SEARCH_LIMIT   1000
+#define BDF_SEARCH_CONTEXT 40
+
+typedef struct bdf_text_hits bdf_text_hits;
+
+/*
+ * bdf_text_search_find is the hits of a query, in the order of the text, at
+ * most limit of them (hits may overlap: each starts a character after the
+ * one before at the earliest). White space of any kind and length in the
+ * query is one space. context is how many characters of the searchable text
+ * each hit keeps on each side of it. An empty query has no hits.
+ */
+BDF_API bdf_status bdf_text_search_find(const bdf_text_search *search, const char *query,
+                                        size_t len, size_t limit, size_t context,
+                                        bdf_text_hits **out, bdf_error *err);
+BDF_API void bdf_text_hits_free(bdf_text_hits *hits);
+BDF_API size_t bdf_text_hits_count(const bdf_text_hits *hits);
+
+typedef struct bdf_text_hit {
+  const char *text; /* what was found, as the document has it (not normalised) */
+  size_t text_len;
+  const char *context; /* the searchable text around it; a break shows as " ⏎ " */
+  size_t context_len;
+  size_t nsegments; /* the runs it lies in: one or more in a row */
+} bdf_text_hit;
+
+BDF_API bdf_status bdf_text_hits_at(const bdf_text_hits *hits, size_t i, bdf_text_hit *out);
+
+/* The part of a hit inside one run. */
+typedef struct bdf_text_hit_segment {
+  size_t run;        /* the index of the run in the text index */
+  uint32_t a, b;     /* that run's page and layer, or tile x and y */
+  uint32_t ordinal;  /* and its ordinal in the object (bdf_text_run.ordinal) */
+  size_t start, end; /* the bytes of the run's text the hit covers: [start, end) */
+} bdf_text_hit_segment;
+
+BDF_API bdf_status bdf_text_hits_segment(const bdf_text_hits *hits, size_t i, size_t k,
+                                         bdf_text_hit_segment *out);
 
 /* ---- Cue index (spec §4.4) ---------------------------------------------- */
 

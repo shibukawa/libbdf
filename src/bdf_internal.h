@@ -190,7 +190,8 @@ BDF_INTERNAL void bdfi_use_limits_init(bdfi_use_limits *l);
 BDF_INTERNAL void bdfi_use_limits_free(bdfi_use_limits *l);
 
 /* bdfi_text_extract is bdf_text_extract with the limits of the caller, and
- * with or without the links. */
+ * with or without the links and the structure (the runs alone are what a
+ * text index is made of). */
 BDF_INTERNAL bdf_status bdfi_text_extract(const bdf_object *obj, bdf_resolve_fn resolve, void *ctx,
                                           bdfi_use_limits *limits, int links, bdf_text **out,
                                           bdf_error *err);
@@ -397,6 +398,13 @@ BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, cons
 /* bdfi_nfc normalises UTF-8 to form C into a buffer of its own (NUL after
  * it): 0, or -1 when out of memory. Bytes that are not UTF-8 are kept. */
 BDF_INTERNAL int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len);
+
+/* bdfi_utf8_next decodes the character at s[i] (i < n) as a decoder does
+ * that replaces what is malformed, the browser's: its value, U+FFFD for the
+ * bytes of what is no character, and in *len the bytes it took, 1 to 4. */
+BDF_INTERNAL uint32_t bdfi_utf8_next(const char *s, size_t n, size_t i, size_t *len);
+/* bdfi_utf8_put writes a character (not a surrogate) as UTF-8: 1 to 4 bytes. */
+BDF_INTERNAL size_t bdfi_utf8_put(uint32_t c, char *out);
 
 /* ---- Cryptography (spec §3.5) ------------------------------------------- */
 

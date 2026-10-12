@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.5.0
+  VERSION 0.6.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -37,6 +37,7 @@ set(BDF_SOURCES
   src/text.c
   src/index.c
   src/unicode.c
+  src/search.c
   src/crypto.c
   src/version.c)
 
@@ -100,7 +101,7 @@ if(Python3_Interpreter_FOUND)
   set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
   add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
-    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/unicode_nfc.h include/bdf/bdf.h tools/amalgamate.py
+    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/unicode_nfc.h src/unicode_fold.h include/bdf/bdf.h tools/amalgamate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating the single-header bdf.h"
     VERBATIM)

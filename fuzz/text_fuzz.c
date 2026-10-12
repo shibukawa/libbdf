@@ -2,6 +2,7 @@
  * the walk of an object that resolves every part name to itself. */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 #include "bdf/bdf.h"
 
@@ -39,7 +40,30 @@ static void touch_text(bdf_text *t) {
     char id[64];
     bdf_text_link_at(t, i, &l);
     bdf_link_parse(l.url, l.url_len, &target);
-    sink += l.w + (float)bdf_link_view_id(&target, id, sizeof id);
+    sink += l.w + (float)bdf_link_view_id(&target, id, sizeof id) + (float)l.node;
+  }
+  /* the structure: every node names a node before it, or none */
+  size_t nodes = bdf_text_node_count(t);
+  for (size_t i = 0; i < nodes; i++) {
+    bdf_text_node n;
+    bdf_text_node_at(t, i, &n);
+    if (n.parent < -1 || n.parent >= (int64_t)i) {
+      abort();
+    }
+    sink += n.x + n.w + (float)n.alt_len + (float)n.row + (float)n.level;
+    if (n.alt_len > 0) {
+      sink += (float)n.alt[n.alt_len - 1];
+    }
+  }
+  for (size_t i = 0; i < bdf_text_run_count(t); i++) {
+    bdf_text_run r;
+    bdf_text_run_at(t, i, &r);
+    if (r.node < 0 || r.node >= (int64_t)nodes) {
+      abort();
+    }
+    if (r.lang_len > 0) {
+      sink += (float)r.lang[r.lang_len - 1];
+    }
   }
 }
 

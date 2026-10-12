@@ -135,6 +135,16 @@ static inline int manifest_opens(const char *manifest, bdf_error *err) {
   return st == BDF_OK;
 }
 
+/* w_index_run writes a run of a text index part (spec §7.9). */
+static inline void w_index_run(wr *w, uint32_t a, uint32_t b, uint32_t ordinal, uint8_t sep,
+                               const char *text) {
+  w_varuint(w, a);
+  w_varuint(w, b);
+  w_varuint(w, ordinal);
+  w_u8(w, sep);
+  w_str(w, text);
+}
+
 /* ---- An object builder --------------------------------------------------- */
 
 /* ob assembles an Object part: its tables and its op stream. */
@@ -252,6 +262,14 @@ static inline void ob_link(ob *o, float x, float y, float w, float h, const char
   w_f32(&o->ops, w);
   w_f32(&o->ops, h);
   w_varuint(&o->ops, s);
+}
+
+static inline void ob_rect(ob *o, uint8_t op, float x, float y, float w, float h) {
+  ob_op(o, op); /* FILL_RECT, STROKE_RECT, CLIP_RECT, CLEAR_RECT */
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, w);
+  w_f32(&o->ops, h);
 }
 
 static inline void ob_mask_begin(ob *o) {
