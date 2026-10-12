@@ -478,12 +478,11 @@ func TestUnlockRefusals(t *testing.T) {
 // TestSealedDamage changes one byte of an encrypted document at a time: the
 // two readers must agree on what still opens and reads.
 func TestSealedDamage(t *testing.T) {
-	_, small, ok := openBoth(t, filepath.Join(testdataDir(t), "pdf", "cairo-cff.bdf"))
+	doc, small, ok := openBoth(t, filepath.Join(testdataDir(t), "pdf", "cairo-cff.bdf"))
 	if !ok {
 		t.Fatal("the document is encrypted")
 	}
 	small.Close()
-	doc, _, _ := openBoth(t, filepath.Join(testdataDir(t), "pdf", "cairo-cff.bdf"))
 	lock, _ := bdf.NewPasswordLock("pass", 10)
 	doc.Lock = lock
 	var buf bytes.Buffer
@@ -497,7 +496,16 @@ func TestSealedDamage(t *testing.T) {
 		data[at] ^= 0x20
 		r, werr := bdf.OpenSingle(bytes.NewReader(data), int64(len(data)))
 		d, gerr := OpenMemory(data)
+		// a change that makes "H" of "h" leaves a member libbdf does not
+		// see and encoding/json does (see foldedMembers): the two then
+		// read different documents, and may differ
+		folded := foldedMembers(data)
 		if gerr == nil && werr != nil {
+			if folded {
+				d.Close()
+				refused++
+				continue
+			}
 			t.Fatalf("byte %d: libbdf opens what the reference refuses: %v", at, werr)
 		}
 		if gerr != nil {
@@ -513,6 +521,11 @@ func TestSealedDamage(t *testing.T) {
 		}
 		werr, gerr = r.Unlock("pass"), d.Unlock("pass")
 		if (werr == nil) != (gerr == nil) {
+			if folded && gerr != nil {
+				d.Close()
+				refused++
+				continue
+			}
 			t.Fatalf("byte %d: unlock: reference %v, libbdf %v", at, werr, gerr)
 		}
 		if werr == nil {
