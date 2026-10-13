@@ -706,6 +706,8 @@ type TextRun struct {
 	Align, Sep    uint8
 	AltText       bool
 	Ordinal       uint32
+	Node          int64
+	Lang          string
 }
 
 // TextLink is a LINK area of a text.
@@ -713,6 +715,84 @@ type TextLink struct {
 	X, Y, W, H float32
 	URL        string
 	After      int64
+	Node       int64
+}
+
+// TextNode is a structure node of a text.
+type TextNode struct {
+	Kind                 uint8
+	Parent               int64
+	Level                uint8
+	HasCell              bool
+	Row, Col, Rows, Cols uint32
+	Scope                uint8
+	Alt                  string
+	HasBounds            bool
+	X, Y, W, H           float32
+}
+
+// Node kinds and scopes.
+const (
+	NodeParagraph = uint8(C.BDF_NODE_PARAGRAPH)
+	NodeHeading   = uint8(C.BDF_NODE_HEADING)
+	NodeCaption   = uint8(C.BDF_NODE_CAPTION)
+	NodeList      = uint8(C.BDF_NODE_LIST)
+	NodeItem      = uint8(C.BDF_NODE_ITEM)
+	NodeTable     = uint8(C.BDF_NODE_TABLE)
+	NodeCell      = uint8(C.BDF_NODE_CELL)
+	NodeFigure    = uint8(C.BDF_NODE_FIGURE)
+	ScopeCol      = uint8(C.BDF_SCOPE_COL)
+	ScopeRow      = uint8(C.BDF_SCOPE_ROW)
+)
+
+func nodesOf(t *C.bdf_text) []TextNode {
+	nodes := make([]TextNode, int(C.bdf_text_node_count(t)))
+	for i := range nodes {
+		var cn C.bdf_text_node
+		C.bdf_text_node_at(t, C.size_t(i), &cn)
+		nodes[i] = TextNode{
+			Kind: uint8(cn.kind), Parent: int64(cn.parent), Level: uint8(cn.level), HasCell: cn.has_cell != 0,
+			Row: uint32(cn.row), Col: uint32(cn.col), Rows: uint32(cn.rows), Cols: uint32(cn.cols),
+			Scope: uint8(cn.scope), Alt: goString(cn.alt, cn.alt_len), HasBounds: cn.has_bounds != 0,
+			X: float32(cn.x), Y: float32(cn.y), W: float32(cn.w), H: float32(cn.h),
+		}
+	}
+	return nodes
+}
+
+// Has reports whether the document has a part (bdf_doc_part_find).
+func (d *Doc) Has(hash [16]byte) bool {
+	return C.bdf_doc_part_find(d.p, (*C.uint8_t)(unsafe.Pointer(&hash[0])), nil) != 0
+}
+
+// Content is the text of a top-level object of the document with its
+// structure (bdf_doc_text).
+func (d *Doc) Content(hash [16]byte) ([]TextRun, []TextLink, []TextNode, error) {
+	var t *C.bdf_text
+	var e C.bdf_error
+	if C.bdf_doc_text(d.p, (*C.uint8_t)(unsafe.Pointer(&hash[0])), &t, &e) != C.BDF_OK {
+		return nil, nil, nil, errorOf(&e)
+	}
+	defer C.bdf_text_free(t)
+	runs, links := textOf(t)
+	return runs, links, nodesOf(t), nil
+}
+
+// ExtractContent walks an object with bdf_text_extract, as ExtractText, and
+// returns the structure too.
+func ExtractContent(top, child *Object) ([]TextRun, []TextLink, []TextNode, error) {
+	var t *C.bdf_text
+	var e C.bdf_error
+	var cchild *C.bdf_object
+	if child != nil {
+		cchild = child.p
+	}
+	if C.cbdf_extract(top.p, cchild, &t, &e) != C.BDF_OK {
+		return nil, nil, nil, errorOf(&e)
+	}
+	defer C.bdf_text_free(t)
+	runs, links := textOf(t)
+	return runs, links, nodesOf(t), nil
 }
 
 func textOf(t *C.bdf_text) ([]TextRun, []TextLink) {
@@ -724,6 +804,7 @@ func textOf(t *C.bdf_text) ([]TextRun, []TextLink) {
 			Text: goString(cr.text, cr.text_len), X: float32(cr.x), Y: float32(cr.y),
 			Advance: float32(cr.advance), Size: float32(cr.size), HasFont: cr.has_font != 0,
 			Align: uint8(cr.align), Sep: uint8(cr.sep), AltText: cr.alt_text != 0, Ordinal: uint32(cr.ordinal),
+			Node: int64(cr.node), Lang: goString(cr.lang, cr.lang_len),
 		}
 		for k := range r.Matrix {
 			r.Matrix[k] = float32(cr.matrix[k])
@@ -743,7 +824,7 @@ func textOf(t *C.bdf_text) ([]TextRun, []TextLink) {
 		C.bdf_text_link_at(t, C.size_t(i), &cl)
 		links[i] = TextLink{
 			X: float32(cl.x), Y: float32(cl.y), W: float32(cl.w), H: float32(cl.h),
-			URL: goString(cl.url, cl.url_len), After: int64(cl.after),
+			URL: goString(cl.url, cl.url_len), After: int64(cl.after), Node: int64(cl.node),
 		}
 	}
 	return runs, links
@@ -816,6 +897,89 @@ func DecodeTextIndex(data []byte) ([]IndexRun, string, error) {
 	defer C.bdf_text_index_free(idx)
 	plain, err := plainOf(idx)
 	return indexOf(idx), plain, err
+}
+
+// Hit is a hit of a search.
+type Hit struct {
+	Text, Context string
+	Segments      []HitSegment
+}
+
+// HitSegment is the part of a hit inside one run.
+type HitSegment struct {
+	Run           int
+	A, B, Ordinal uint32
+	Start, End    int
+}
+
+// SearchIndexPart decodes a text index part and searches it for each query
+// (bdf_text_search_new, bdf_text_search_find): the searchable text and the
+// hits of each query.
+func SearchIndexPart(data []byte, caseSensitive bool, queries []string, limit, context int) (string, [][]Hit, error) {
+	var idx *C.bdf_text_index
+	var e C.bdf_error
+	if C.bdf_text_index_decode(ptr(data), C.size_t(len(data)), &idx, &e) != C.BDF_OK {
+		return "", nil, errorOf(&e)
+	}
+	defer C.bdf_text_index_free(idx)
+	var s *C.bdf_text_search
+	cs := C.int(0)
+	if caseSensitive {
+		cs = 1
+	}
+	if C.bdf_text_search_new(idx, cs, &s, &e) != C.BDF_OK {
+		return "", nil, errorOf(&e)
+	}
+	defer C.bdf_text_search_free(s)
+	var plain *C.char
+	var n C.size_t
+	if C.bdf_text_search_plain(s, &plain, &n, &e) != C.BDF_OK {
+		return "", nil, errorOf(&e)
+	}
+	text := goString(plain, n)
+	C.bdf_free(unsafe.Pointer(plain))
+	out := make([][]Hit, len(queries))
+	for qi, q := range queries {
+		b := []byte(q)
+		var hits *C.bdf_text_hits
+		if C.bdf_text_search_find(s, (*C.char)(unsafe.Pointer(ptr(b))), C.size_t(len(b)), C.size_t(limit), C.size_t(context), &hits, &e) != C.BDF_OK {
+			return "", nil, errorOf(&e)
+		}
+		out[qi] = make([]Hit, int(C.bdf_text_hits_count(hits)))
+		for i := range out[qi] {
+			var h C.bdf_text_hit
+			C.bdf_text_hits_at(hits, C.size_t(i), &h)
+			hit := Hit{Text: goString(h.text, h.text_len), Context: goString(h.context, h.context_len)}
+			for k := 0; k < int(h.nsegments); k++ {
+				var seg C.bdf_text_hit_segment
+				C.bdf_text_hits_segment(hits, C.size_t(i), C.size_t(k), &seg)
+				hit.Segments = append(hit.Segments, HitSegment{
+					Run: int(seg.run), A: uint32(seg.a), B: uint32(seg.b), Ordinal: uint32(seg.ordinal),
+					Start: int(seg.start), End: int(seg.end),
+				})
+			}
+			out[qi][i] = hit
+		}
+		C.bdf_text_hits_free(hits)
+	}
+	return text, out, nil
+}
+
+// NormalizeQuery is text as a search has it (bdf_text_search_normalize).
+func NormalizeQuery(s string, caseSensitive bool) (string, error) {
+	b := []byte(s)
+	var out *C.char
+	var n C.size_t
+	var e C.bdf_error
+	cs := C.int(0)
+	if caseSensitive {
+		cs = 1
+	}
+	if C.bdf_text_search_normalize((*C.char)(unsafe.Pointer(ptr(b))), C.size_t(len(b)), cs, &out, &n, &e) != C.BDF_OK {
+		return "", errorOf(&e)
+	}
+	defer C.bdf_free(unsafe.Pointer(out))
+	return goString(out, n), nil
 }
 
 // ViewText is the text of a view (bdf_doc_view_text).

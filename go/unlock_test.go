@@ -56,7 +56,7 @@ func compareOpened(r *bdf.Reader, d *Doc) string {
 // password and opens it with both readers.
 func TestUnlockPasswordMatchesReference(t *testing.T) {
 	// the same password as the keyboard composes it and as it decomposes
-	passwords := [][2]string{{"pass", "pass"}, {"パスワードガ", "パスワードガ"}, {"é à ñ", "é à ñ"}, {"\U0001f511 key", "\U0001f511 key"}}
+	passwords := [][2]string{{"pass", "pass"}, {"パスワードガ", "ハ\u309aスワート\u3099カ\u3099"}, {"é à ñ", "e\u0301 a\u0300 n\u0303"}, {"\U0001f511 key", "\U0001f511 key"}}
 	docs, partsRead := 0, 0
 	for i, f := range documents(t) {
 		doc, cdoc, ok := openBoth(t, f)

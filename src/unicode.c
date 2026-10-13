@@ -166,6 +166,44 @@ static size_t bdfi_utf8_encode(uint32_t c, uint8_t *out) {
   return 4;
 }
 
+uint32_t bdfi_utf8_next(const char *s, size_t n, size_t i, size_t *len) {
+  const uint8_t *b = (const uint8_t *)s;
+  uint8_t c = b[i];
+  if (c < 0x80) {
+    *len = 1;
+    return c;
+  }
+  size_t need = 0;
+  uint8_t lo = 0x80, hi = 0xBF;
+  uint32_t v = 0;
+  if (c >= 0xC2 && c <= 0xDF) {
+    need = 1;
+    v = c & 0x1F;
+  } else if (c >= 0xE0 && c <= 0xEF) {
+    need = 2;
+    v = c & 0x0F;
+    lo = c == 0xE0 ? 0xA0 : 0x80;
+    hi = c == 0xED ? 0x9F : 0xBF;
+  } else if (c >= 0xF0 && c <= 0xF4) {
+    need = 3;
+    v = c & 0x07;
+    lo = c == 0xF0 ? 0x90 : 0x80;
+    hi = c == 0xF4 ? 0x8F : 0xBF;
+  }
+  size_t k = 1, got = 0;
+  while (got < need && i + k < n && b[i + k] >= lo && b[i + k] <= hi) {
+    v = (v << 6) | (b[i + k] & 0x3F);
+    k++;
+    got++;
+    lo = 0x80;
+    hi = 0xBF;
+  }
+  *len = k;
+  return need > 0 && got == need ? v : 0xFFFD;
+}
+
+size_t bdfi_utf8_put(uint32_t c, char *out) { return bdfi_utf8_encode(c, (uint8_t *)out); }
+
 typedef struct bdfi_cps {
   uint32_t *c;
   uint8_t *cc; /* the combining class of each */

@@ -267,15 +267,15 @@ func TestP256MatchesGo(t *testing.T) {
 // into its output: it breaks runs of more than 30 combining marks with one
 // (the stream-safe format), which is not NFC and which libbdf does not do.
 func goInsertedJoiner(in, out string) bool {
-	return strings.Count(out, "͏") != strings.Count(in, "͏")
+	return strings.Count(out, "\u034f") != strings.Count(in, "\u034f")
 }
 
 // nfcAlphabet holds characters that normalisation does something with.
 var nfcAlphabet = []rune("aeAEoOuUnNcC éÅṩǕ" + // precomposed Latin
-	"̸ְִุཱིུ̧̨̛̣̀́̂̃̈̊ͅ" + // marks of many classes
-	"かハヴ゚パガ" + // kana and their marks
+	"\u0300\u0301\u0302\u0303\u0308\u030a\u0323\u0327\u0328\u031b\u0338\u0345\u05b0\u05b4\u0e38\u0f71\u0f72\u0f74" + // marks of many classes
+	"かハウ\u3099\u309aパガ" + // kana and their marks
 	"ᄀ하ᅵᆨᇂ가힣각" + // Hangul
-	"豈﨎יִשׁÅῺ́̓̈́ʹ;ά 〈" + // singletons and exclusions
+	"豈﨎יִשׁÅΩ\u0340\u0341\u0343\u0344ʹ;ά\u2000〈" + // singletons and exclusions
 	"\U0001d15e\U0001d1bb\U0002f800\U000110ab\U00011099\U000110ba\U0001f600")
 
 func TestNFCMatchesXText(t *testing.T) {
@@ -312,13 +312,13 @@ func TestNFCMatchesXText(t *testing.T) {
 		}
 	}
 	// bytes that are not UTF-8 stay, and do not stop what is around them
-	for _, s := range []string{"\xff", "é\xc3", "\xe3\x81é", "a\x80́", "\xed\xa0\x80が"} {
+	for _, s := range []string{"\xff", "e\u0301\xc3", "\xe3\x81e\u0301", "a\x80\u0301", "\xed\xa0\x80か\u3099"} {
 		if got, want := NFC(s), norm.NFC.String(s); got != want {
 			t.Errorf("NFC(%+q) = %+q, want %+q", s, got, want)
 		}
 	}
 	// a long run of marks out of order is put in order in time in proportion to it
-	long := "a" + strings.Repeat("̣́", 200000)
+	long := "a" + strings.Repeat("\u0301\u0323", 200000)
 	// (the first dot below composes with the letter: three bytes for three)
 	if got := NFC(long); !strings.HasPrefix(got, "\u1ea1\u0323") || !strings.HasSuffix(got, "\u0301\u0301") || len(got) != len(long) {
 		t.Errorf("a long run of marks: %d bytes, starting %+q", len(got), got[:6])
@@ -327,7 +327,7 @@ func TestNFCMatchesXText(t *testing.T) {
 }
 
 func FuzzNFC(f *testing.F) {
-	for _, s := range []string{"", "abc", "é", "パスワード", "각", "\xff́", "ạ̧́"} {
+	for _, s := range []string{"", "abc", "e\u0301", "ハ\u309aスワート\u3099", "각", "\xff\u0301", "a\u0323\u0301\u0327"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {

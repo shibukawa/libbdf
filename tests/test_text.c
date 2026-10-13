@@ -153,6 +153,359 @@ static void test_structure_marks(void) {
   bdf_object_free(obj);
 }
 
+/* ---- The structure -------------------------------------------------------- */
+
+/* expect_nodes checks the nodes against entries joined by '|': the kind, the
+ * parent, then what the node has of a level (l2), a cell (c0,1,2,2), a scope
+ * (col), an alternative text (alt=…) and bounds (b10,20,30,40). */
+static void expect_nodes(const bdf_text *t, const char *want, int line) {
+  static const char *const kinds[] = {"par", "head", "cap", "list", "item", "table", "cell", "fig"};
+  char got[4096] = "";
+  size_t k = 0;
+  for (size_t i = 0; i < bdf_text_node_count(t) && k < sizeof got - 256; i++) {
+    bdf_text_node n;
+    if (bdf_text_node_at(t, i, &n) != BDF_OK || n.kind > BDF_NODE_FIGURE) {
+      failures++;
+      fprintf(stderr, "line %d: node %zu\n", line, i);
+      return;
+    }
+    k += (size_t)snprintf(got + k, sizeof got - k, "%s%s:%lld", i ? "|" : "", kinds[n.kind],
+                          (long long)n.parent);
+    if (n.level) {
+      k += (size_t)snprintf(got + k, sizeof got - k, ":l%d", n.level);
+    }
+    if (n.has_cell) {
+      k += (size_t)snprintf(got + k, sizeof got - k, ":c%u,%u,%u,%u", n.row, n.col, n.rows, n.cols);
+    }
+    if (n.scope) {
+      k += (size_t)snprintf(got + k, sizeof got - k, ":%s", n.scope == BDF_SCOPE_COL ? "col" : "row");
+    }
+    if (n.kind == BDF_NODE_FIGURE) {
+      k += (size_t)snprintf(got + k, sizeof got - k, ":alt=%s", n.alt);
+    }
+    if (n.has_bounds) {
+      k += (size_t)snprintf(got + k, sizeof got - k, ":b%g,%g,%g,%g", (double)n.x, (double)n.y,
+                            (double)n.w, (double)n.h);
+    }
+  }
+  if (strcmp(got, want) != 0) {
+    failures++;
+    fprintf(stderr, "line %d: nodes\n  %s\nwant\n  %s\n", line, got, want);
+  }
+}
+
+/* expect_run_nodes checks the node of each run against "0,1,1,2". */
+static void expect_run_nodes(const bdf_text *t, const char *want, int line) {
+  char got[1024] = "";
+  size_t k = 0;
+  for (size_t i = 0; i < bdf_text_run_count(t) && k < sizeof got - 32; i++) {
+    bdf_text_run r;
+    bdf_text_run_at(t, i, &r);
+    k += (size_t)snprintf(got + k, sizeof got - k, "%s%lld", i ? "," : "", (long long)r.node);
+  }
+  if (strcmp(got, want) != 0) {
+    failures++;
+    fprintf(stderr, "line %d: the nodes of the runs\n  %s\nwant\n  %s\n", line, got, want);
+  }
+}
+
+/* The object of the last extract: the strings of its text point into it, so
+ * it stays until the next one, when that text is done with. */
+static bdf_object *extracted;
+
+static void extract_done(void) {
+  bdf_object_free(extracted);
+  extracted = NULL;
+}
+
+static bdf_text *extract(ob *o, objs *children) {
+  extract_done();
+  extracted = ob_decode(o);
+  bdf_text *t = NULL;
+  bdf_error err;
+  if (!extracted ||
+      bdf_text_extract(extracted, children ? by_id : NULL, children, &t, &err) != BDF_OK) {
+    failures++;
+    fprintf(stderr, "extract: %s\n", extracted ? err.message : "the object does not decode");
+    exit(1);
+  }
+  return t;
+}
+
+static void test_nodes_leaves(void) {
+  /* a leaf MARK chooses the kind of the leaf the next run opens; the last of
+   * several decides; runs without one make a paragraph */
+  ob o = {0};
+  ob_text(&o, "first", 0, 0, 10);
+  ob_mark(&o, BDF_MARK_HEADING, "2");
+  ob_text(&o, "Title", 0, 20, 10);
+  ob_mark(&o, BDF_MARK_PARAGRAPH, "");
+  ob_text(&o, "Body", 0, 40, 10);
+  ob_text(&o, "more", 10, 40, 10);
+  ob_mark(&o, BDF_MARK_LINE, ""); /* a line of the same paragraph */
+  ob_text(&o, "line", 0, 50, 10);
+  ob_mark(&o, BDF_MARK_BOX, "");
+  ob_mark(&o, BDF_MARK_HEADING, "x"); /* no level */
+  ob_text(&o, "H", 0, 60, 10);
+  ob_mark(&o, BDF_MARK_LIST_ITEM, ""); /* outside a list: a paragraph */
+  ob_text(&o, "item", 0, 70, 10);
+  ob_mark(&o, BDF_MARK_CELL, "B12"); /* outside a table: a cell of a sheet, a leaf */
+  ob_text(&o, "cell", 0, 80, 10);
+  ob_mark(&o, BDF_MARK_CELL, "C3:D5 row");
+  ob_text(&o, "merged", 0, 90, 10);
+  ob_mark(&o, BDF_MARK_END, ""); /* nothing is open: nothing ends, the leaf goes on */
+  ob_text(&o, "tail", 0, 100, 10);
+  bdf_text *t = extract(&o, NULL);
+  expect_nodes(t, "par:-1|head:-1:l2|par:-1|head:-1|par:-1|cell:-1:c11,1,1,1|cell:-1:c2,2,3,2:row",
+               __LINE__);
+  expect_run_nodes(t, "0,1,2,2,2,3,4,5,6,6", __LINE__);
+  bdf_text_node n;
+  CHECK(bdf_text_node_at(t, 7, &n) == BDF_ERR_ARG);
+  CHECK(bdf_text_node_at(NULL, 0, &n) == BDF_ERR_ARG);
+  CHECK(bdf_text_node_at(t, 0, NULL) == BDF_ERR_ARG);
+  CHECK(bdf_text_node_count(NULL) == 0);
+  bdf_text_free(t);
+
+  /* the levels JavaScript's Number() reads as 1 to 6, and what it does not */
+  static const struct {
+    const char *payload;
+    int level;
+  } levels[] = {
+      {"1", 1},     {"6", 6},      {"7", 0},        {"0", 0},     {"", 0},      {" 3 ", 3},
+      {"3.0", 3},   {"3.5", 0},    {"+4", 4},       {"-4", 0},    {"5e0", 5},   {"50e-1", 5},
+      {".2e1", 2},  {"2.", 2},     {"0x6", 6},      {"0X6", 6},   {"0b101", 5}, {"0o7", 0},
+      {"0o6", 6},   {"0x", 0},     {"1e", 0},       {"e1", 0},    {".", 0},     {"1 2", 0},
+      {"three", 0}, {"0.00003e5", 3}, {"300e-2", 3}, {"12", 0},   {"1e1", 0},   {"\xE3\x80\x80" "2\xC2\xA0", 2},
+      {"\xEF\xBC\x91", 0}, {"6.000", 6}, {"1e99999999999999999999", 0}, {"0x10", 0}, {"00004", 4},
+      {"+0x3", 0},  {"0b", 0},     {"1_0", 0},      {"Infinity", 0}, {"0.5e+1", 5}, {"5E0", 5},
+      {"+.5e1", 5}, {"0e0", 0},    {"0.0", 0},
+  };
+  for (size_t i = 0; i < sizeof levels / sizeof levels[0]; i++) {
+    ob h = {0};
+    ob_mark(&h, BDF_MARK_HEADING, levels[i].payload);
+    ob_text(&h, "t", 0, 0, 1);
+    t = extract(&h, NULL);
+    CHECK(bdf_text_node_at(t, 0, &n) == BDF_OK && n.kind == BDF_NODE_HEADING);
+    if (n.level != levels[i].level) {
+      failures++;
+      fprintf(stderr, "level of \"%s\" is %d, want %d\n", levels[i].payload, n.level, levels[i].level);
+    }
+    bdf_text_free(t);
+  }
+
+  /* cell references, and what is none */
+  static const struct {
+    const char *payload;
+    const char *want;
+  } cells[] = {
+      {"A1", "cell:-1:c0,0,1,1"},
+      {"b2", "cell:-1:c1,1,1,1"},
+      {"AA10", "cell:-1:c9,26,1,1"},
+      {"XFD1048576", "cell:-1:c1048575,16383,1,1"},
+      {" A1 ", "cell:-1:c0,0,1,1"},
+      {"A1 col", "cell:-1:c0,0,1,1:col"},
+      {"A1\xC2\xA0\trow ", "cell:-1:c0,0,1,1:row"},
+      {"B2:D3", "cell:-1:c1,1,2,3"},
+      {"D3:B2", "cell:-1:c2,3,1,1"}, /* a range written backwards spans one */
+      {"A0", "cell:-1"},             /* rows count from 1 */
+      {"A1col", "cell:-1"},
+      {"A1 column", "cell:-1"},
+      {"A1 col row", "cell:-1"},
+      {"A1:", "cell:-1"},
+      {"1A", "cell:-1"},
+      {"A", "cell:-1"},
+      {"", "cell:-1"},
+      {"A1 Col", "cell:-1"},
+      {"A99999999999", "cell:-1:c4294967295,0,1,1"}, /* more than the type holds: the largest */
+  };
+  for (size_t i = 0; i < sizeof cells / sizeof cells[0]; i++) {
+    ob c = {0};
+    ob_mark(&c, BDF_MARK_CELL, cells[i].payload);
+    ob_text(&c, "t", 0, 0, 1);
+    t = extract(&c, NULL);
+    expect_nodes(t, cells[i].want, __LINE__);
+    bdf_text_free(t);
+  }
+}
+
+static void test_nodes_containers(void) {
+  /* lists: an item for each LIST_ITEM, one of its own for runs before the
+   * first, lists inside items, and END closing the item with its list */
+  ob o = {0};
+  ob_mark(&o, BDF_MARK_LIST, "");
+  ob_text(&o, "stray", 0, 0, 10);
+  ob_mark(&o, BDF_MARK_LIST_ITEM, "");
+  ob_text(&o, "one", 0, 10, 10);
+  ob_mark(&o, BDF_MARK_LIST, "");
+  ob_mark(&o, BDF_MARK_LIST_ITEM, "");
+  ob_text(&o, "sub", 0, 20, 10);
+  ob_mark(&o, BDF_MARK_END, "");
+  ob_mark(&o, BDF_MARK_PARAGRAPH, "");
+  ob_text(&o, "cont", 0, 30, 10);
+  ob_mark(&o, BDF_MARK_END, "");
+  ob_mark(&o, BDF_MARK_END, "");
+  ob_text(&o, "after", 0, 40, 10);
+  bdf_text *t = extract(&o, NULL);
+  expect_nodes(t, "list:-1|item:0|par:1|item:0|par:3|list:3|item:5|par:6|par:3|par:-1", __LINE__);
+  expect_run_nodes(t, "2,4,7,8,9", __LINE__);
+  bdf_text_free(t);
+
+  /* tables: a caption for runs before the first cell, cells that hold
+   * leaves, and a sheet's cell after the table */
+  ob tb = {0};
+  ob_mark(&tb, BDF_MARK_TABLE, "");
+  ob_text(&tb, "Caption", 0, 0, 10);
+  ob_text(&tb, "still", 20, 0, 10);
+  ob_mark(&tb, BDF_MARK_CELL, "A1 col");
+  ob_text(&tb, "h", 0, 10, 10);
+  ob_mark(&tb, BDF_MARK_CELL, "B1:C2");
+  ob_mark(&tb, BDF_MARK_HEADING, "1");
+  ob_text(&tb, "x", 0, 20, 10);
+  ob_mark(&tb, BDF_MARK_CELL, "no place");
+  ob_mark(&tb, BDF_MARK_END, "");
+  ob_mark(&tb, BDF_MARK_CELL, "B12");
+  ob_text(&tb, "sheet", 0, 30, 10);
+  t = extract(&tb, NULL);
+  expect_nodes(t, "table:-1|cap:0|cell:0:c0,0,1,1:col|par:2|cell:0:c0,1,2,2|head:4:l1|cell:0|cell:-1:c11,1,1,1",
+               __LINE__);
+  expect_run_nodes(t, "1,1,3,5,7", __LINE__);
+  bdf_text_free(t);
+
+  /* the structure runs on through the objects an object draws, and what is
+   * open at the end of the top-level object is closed there */
+  ob c = {0};
+  ob_mark(&c, BDF_MARK_LIST_ITEM, "");
+  ob_text(&c, "entry", 0, 0, 10);
+  bdf_object *child = ob_decode(&c);
+  bdf_object *table[2] = {NULL, child};
+  objs children = {table, 2};
+  ob top = {0};
+  ob_mark(&top, BDF_MARK_LIST, "");
+  ob_use(&top, ob_child(&top, 1));
+  ob_use_at(&top, ob_child(&top, 1), 0, 20);
+  ob_mark(&top, BDF_MARK_FIGURE, "left open");
+  t = extract(&top, &children);
+  expect_nodes(t, "list:-1|item:0|par:1|item:0|par:3|fig:3:alt=left open:b0,0,0,0", __LINE__);
+  expect_run_nodes(t, "2,4", __LINE__);
+  bdf_text_free(t);
+  bdf_object_free(child);
+
+  /* the language of runs, and the node a link belongs to */
+  ob l = {0};
+  ob_link(&l, 0, 0, 1, 1, "#page=1");
+  ob_text(&l, "plain", 0, 0, 10);
+  ob_mark(&l, BDF_MARK_LANG, "ja");
+  ob_text(&l, "nihongo", 12, 0, 10);
+  ob_link(&l, 0, 0, 1, 1, "#page=2");
+  ob_mark(&l, BDF_MARK_LIST, "");
+  ob_link(&l, 0, 0, 1, 1, "#page=3");
+  ob_mark(&l, BDF_MARK_LANG, "");
+  ob_mark(&l, BDF_MARK_LIST_ITEM, "");
+  ob_text(&l, "item", 0, 20, 10);
+  t = extract(&l, NULL);
+  expect_nodes(t, "par:-1|list:-1|item:1|par:2", __LINE__);
+  bdf_text_run r;
+  bdf_text_link k;
+  CHECK(bdf_text_run_at(t, 0, &r) == BDF_OK && r.lang_len == 0 && r.lang[0] == 0 && r.node == 0);
+  CHECK(bdf_text_run_at(t, 1, &r) == BDF_OK && r.lang_len == 2 && memcmp(r.lang, "ja", 2) == 0);
+  CHECK(bdf_text_run_at(t, 2, &r) == BDF_OK && r.lang_len == 0 && r.node == 3);
+  CHECK(bdf_text_link_at(t, 0, &k) == BDF_OK && k.node == -1 && k.after == -1);
+  CHECK(bdf_text_link_at(t, 1, &k) == BDF_OK && k.node == 0 && k.after == 1);
+  CHECK(bdf_text_link_at(t, 2, &k) == BDF_OK && k.node == 1 && k.after == 1);
+  bdf_text_free(t);
+}
+
+static void test_nodes_figures(void) {
+  /* the bounds of a figure: what it draws, moved by the transform */
+  ob o = {0};
+  ob_translate(&o, 10, 20);
+  ob_set_font(&o, ob_font(&o, "sans-serif"), 10);
+  ob_mark(&o, BDF_MARK_FIGURE, "a chart");
+  ob_rect(&o, BDF_OP_FILL_RECT, 0, 0, 30, 40);
+  ob_text(&o, "label", 5, 50, 20); /* its advance wide, its size high, from 0.8 of it above */
+  ob_rect(&o, BDF_OP_CLEAR_RECT, 0, 0, 500, 500); /* draws nothing */
+  ob_mark(&o, BDF_MARK_END, "");
+  ob_mark(&o, BDF_MARK_FIGURE, ""); /* a decoration that draws nothing: where it opens */
+  ob_mark(&o, BDF_MARK_END, "");
+  ob_rect(&o, BDF_OP_FILL_RECT, 0, 0, 900, 900); /* after the figures */
+  bdf_text *t = extract(&o, NULL);
+  expect_nodes(t, "fig:-1:alt=a chart:b10,20,30,52|par:0|fig:-1:alt=:b10,20,0,0", __LINE__);
+  bdf_text_free(t);
+
+  /* clipped by the clip at the time, which SAVE and RESTORE keep */
+  ob c = {0};
+  ob_mark(&c, BDF_MARK_FIGURE, "f");
+  ob_op(&c, BDF_OP_SAVE);
+  ob_rect(&c, BDF_OP_CLIP_RECT, 0, 0, 10, 10);
+  ob_rect(&c, BDF_OP_FILL_RECT, 5, 5, 20, 20);
+  ob_rect(&c, BDF_OP_STROKE_RECT, 50, 50, 1, 1); /* outside the clip */
+  ob_op(&c, BDF_OP_RESTORE);
+  ob_mark(&c, BDF_MARK_END, "");
+  ob_mark(&c, BDF_MARK_FIGURE, "g");
+  ob_rect(&c, BDF_OP_STROKE_RECT, 50, 50, 1, 1);
+  t = extract(&c, NULL);
+  expect_nodes(t, "fig:-1:alt=f:b5,5,5,5|fig:-1:alt=g:b50,50,1,1", __LINE__);
+  bdf_text_free(t);
+
+  /* paths by their points, figures inside figures, what a child draws, and
+   * text without an advance: half its size for each UTF-16 unit, about its
+   * anchor when centred */
+  ob ch = {0};
+  ch.bbox[2] = 8;
+  ch.bbox[3] = 8;
+  ob_rect(&ch, BDF_OP_FILL_RECT, 0, 0, 8, 8);
+  bdf_object *child = ob_decode(&ch);
+  bdf_object *table[2] = {NULL, child};
+  objs children = {table, 2};
+  ob p = {0};
+  size_t sq = ob_rect_path(&p);
+  ob_set_font(&p, ob_font(&p, "sans-serif"), 10);
+  ob_mark(&p, BDF_MARK_FIGURE, "outer");
+  ob_path_at(&p, sq, 100, 100);
+  ob_mark(&p, BDF_MARK_FIGURE, "inner");
+  ob_use_at(&p, ob_child(&p, 1), 200, 200);
+  ob_mark(&p, BDF_MARK_END, "");
+  ob_align(&p, BDF_ALIGN_CENTER);
+  ob_text(&p, "e\xCC\x81\xF0\x9F\x98\x80", 50, 50, 0); /* e, a combining accent, an emoji: 4 units */
+  ob_mark(&p, BDF_MARK_ALT_TEXT, "seen");
+  /* drawn for the text: its box counts, and so does the text's, which is as
+   * wide as the box and centred on its left edge */
+  ob_use_at(&p, ob_child(&p, 1), 300, 0);
+  t = extract(&p, &children);
+  expect_nodes(t, "fig:-1:alt=outer:b40,-8,268,216|fig:0:alt=inner:b200,200,8,8|par:0", __LINE__);
+  bdf_text_free(t);
+  bdf_object_free(child);
+
+  /* a mask is no content: neither its marks nor what it draws */
+  ob m = {0};
+  ob_mark(&m, BDF_MARK_FIGURE, "f");
+  ob_mask_begin(&m);
+  ob_rect(&m, BDF_OP_FILL_RECT, 0, 0, 100, 100);
+  ob_mark(&m, BDF_MARK_LIST, "");
+  ob_op(&m, BDF_OP_MASK_END);
+  ob_rect(&m, BDF_OP_FILL_RECT, 1, 2, 3, 4);
+  t = extract(&m, NULL);
+  expect_nodes(t, "fig:-1:alt=f:b1,2,3,4", __LINE__);
+  bdf_text_free(t);
+
+  /* figures inside more figures than grow: the innermost keep no size */
+  ob deep = {0};
+  ob_translate(&deep, 3, 4);
+  for (int i = 0; i < 70; i++) {
+    ob_mark(&deep, BDF_MARK_FIGURE, "");
+  }
+  ob_rect(&deep, BDF_OP_FILL_RECT, 0, 0, 5, 6);
+  t = extract(&deep, NULL);
+  CHECK(bdf_text_node_count(t) == 70);
+  for (size_t i = 0; i < 70; i++) {
+    bdf_text_node n;
+    CHECK(bdf_text_node_at(t, i, &n) == BDF_OK && n.kind == BDF_NODE_FIGURE && n.has_bounds);
+    CHECK(n.parent == (int64_t)i - 1 && n.x == 3 && n.y == 4);
+    CHECK(i < 64 ? (n.w == 5 && n.h == 6) : (n.w == 0 && n.h == 0));
+  }
+  bdf_text_free(t);
+}
+
 static void test_bad_references(void) {
   /* TestExtractTextBadReferences: references past the tables are not followed */
   ob o = {0};
@@ -391,13 +744,6 @@ static void test_link_targets(void) {
 
 /* ---- Index parts --------------------------------------------------------- */
 
-static void w_index_run(wr *w, uint32_t a, uint32_t b, uint32_t ordinal, uint8_t sep, const char *text) {
-  w_varuint(w, a);
-  w_varuint(w, b);
-  w_varuint(w, ordinal);
-  w_u8(w, sep);
-  w_str(w, text);
-}
 
 static wr text_index(void) {
   wr w = {0};
@@ -835,6 +1181,10 @@ static void test_document_errors(void) {
 int main(void) {
   test_extract();
   test_structure_marks();
+  test_nodes_leaves();
+  test_nodes_containers();
+  test_nodes_figures();
+  extract_done();
   test_bad_references();
   test_nesting();
   test_masks_and_links();

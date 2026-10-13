@@ -71,7 +71,7 @@ var private = unhex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120
 // decomposes: both must open it.
 const (
 	passwordNFC = "pässwörd ガ"
-	passwordNFD = "pässwörd ガ"
+	passwordNFD = "pa\u0308sswo\u0308rd カ\u3099"
 )
 
 func unlockVectors(path string) {
@@ -283,13 +283,13 @@ func cryptoVectors(path string) {
 
 	// NFC, with what x/text makes of each input
 	inputs := []string{
-		"", "plain ASCII", "café", "é", "ạ̈", "ạ̈", "ẛ̣", "q̣̇",
+		"", "plain ASCII", "cafe\u0301", "é", "a\u0308\u0323", "a\u0323\u0308", "ẛ\u0323", "q\u0307\u0323",
 		"가", "각", "각", "힣", "ᆨᄀ",
-		"ガ", "パ", "が", "क़", "क़", "Ω", "Å", "̀", "̈́", "ཱི", "ཱི",
-		"\U0001d15e", "\U0001d157\U0001d165", "\U00011099\U000110ba", "\U0001109a", "̀", "̀a", "à́̂̃",
-		"דּ", "דּ", "གྷ", "ো", "ো", "ᬆ", "é́", "Ǻ", "Ǻ",
-		"\xff", "a\xc3", "\xe3\x81", "\xf0\x9f\x98", "\xc0\xaf", "\xed\xa0\x80", "ab\x80cd́", "Ą́",
-		"ế", "Ḕ", "Ḕ", "Ǖ", "Ǖ", "ΐ", "ΐ", "ᄀ", "각", "à֮̀̕b",
+		"カ\u3099", "ハ\u309a", "が", "क़", "क\u093c", "Ω", "Å", "\u0340", "\u0344", "\u0f73", "\u0f71\u0f72",
+		"\U0001d15e", "\U0001d157\U0001d165", "\U00011099\U000110ba", "\U0001109a", "\u0300", "\u0300a", "a\u0300\u0301\u0302\u0303",
+		"ד\u05bc", "דּ", "གྷ", "\u09c7\u09be", "\u09cb", "ᬅ\u1b35", "e\u0301\u0301", "Å\u0301", "A\u030a\u0301",
+		"\xff", "a\xc3", "\xe3\x81", "\xf0\x9f\x98", "\xc0\xaf", "\xed\xa0\x80", "ab\x80cd\u0301", "A\u0328\u0301",
+		"ế", "Ē\u0300", "Ḕ", "Ǖ", "U\u0308\u0304", "ΐ", "ι\u0308\u0301", "ᄀ", "각", "a\u0315\u0300\u05ae\u0300b",
 	}
 	fmt.Fprintf(&o.b, "#define CV_NFC_CASES %d\n", len(inputs))
 	var in, want []byte
