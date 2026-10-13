@@ -16,6 +16,8 @@ option(BDF_INSTALL "Generate the install rules" ${PROJECT_IS_TOP_LEVEL})
 option(BDF_WITH_BROTLI "Decode WOFF2 fonts with the vendored Brotli decoder (third_party/brotli)" ON)
 option(BDF_CAIRO "Build bdf::cairo, which draws documents with cairo" OFF)
 option(BDF_COREGRAPHICS "Build bdf::coregraphics, which draws documents with Core Graphics" OFF)
+option(BDF_QT "Build bdf::qt, which draws documents with QPainter (C++)" OFF)
+option(BDF_SKIA "Build bdf::skia, which draws documents with Skia (C++; see BDF_SKIA_DIR)" OFF)
 set(BDF_SANITIZE "" CACHE STRING "Sanitizers to build everything with, e.g. address,undefined")
 set(BDF_CONFORMANCE_DIR "" CACHE PATH "A conformance suite written by `bdf conformance`, run by ctest")
 
