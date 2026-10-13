@@ -116,7 +116,11 @@ func files(dirs []string, ext string) map[string][]byte {
 	out := map[string][]byte{}
 	for _, d := range dirs {
 		filepath.Walk(d, func(p string, info os.FileInfo, err error) error {
-			if err != nil || !info.Mode().IsRegular() || !strings.HasSuffix(strings.ToLower(p), ext) {
+			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(p), ext) {
+				return nil
+			}
+			// a link to a file is the file (what a package manager installs often is one)
+			if st, err := os.Stat(p); err != nil || !st.Mode().IsRegular() {
 				return nil
 			}
 			if b, err := os.ReadFile(p); err == nil {
