@@ -22,6 +22,16 @@ static uint32_t pixel(const bdf_image *img, int x, int y) {
   return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
+/* Whether a renderer has warned of something. */
+static int warned(const bdf_renderer *r, const char *what) {
+  for (size_t i = 0; i < bdf_renderer_warning_count(r); i++) {
+    if (strstr(bdf_renderer_warning(r, i), what)) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static bdf_object *box_object(ob *o, float w, float h) {
   o->bbox[2] = w;
   o->bbox[3] = h;
@@ -33,7 +43,7 @@ static void test_reference_objects(void) {
     bdf_object *obj = NULL;
     bdf_error err;
     bdf_image img;
-    bdf_render_options opts = {rv_object[i].has_background, rv_object[i].background};
+    bdf_render_options opts = {rv_object[i].has_background, rv_object[i].background, NULL};
     CHECK(bdf_object_decode(rv_objects + rv_object[i].off, rv_object[i].len, &obj, &err) == BDF_OK);
     if (bdf_render_object(obj, rv_object[i].scale, &opts, &img, &err) != BDF_OK) {
       failures++;
@@ -136,6 +146,222 @@ static void test_reference_images(void) {
   }
 }
 
+/* The documents that draw text, with the fonts made for the tests: the
+ * outlines of the fonts, the faces found for the families, and the layout
+ * are the reference's. */
+static void test_reference_text(void) {
+  bdf_error err;
+  bdf_fonts *fonts = NULL;
+  CHECK(bdf_fonts_new(&fonts, &err) == BDF_OK);
+  for (size_t i = 0; i < RV_FONTS; i++) {
+    CHECK(bdf_fonts_add(fonts, rv_fonts + rv_font[i].off, rv_font[i].len, &err) == BDF_OK);
+  }
+  CHECK(bdf_fonts_count(fonts) == RV_FONTS);
+  bdf_render_options opts = {0, 0, fonts};
+  for (size_t d = 0; d < RV_TEXT_DOCUMENTS; d++) {
+    bdf_doc *doc = NULL;
+    bdf_renderer *r = NULL;
+    CHECK(bdf_doc_open_memory(rv_text_documents + rv_text_document[d].off, rv_text_document[d].len, &doc,
+                              &err) == BDF_OK);
+    CHECK(bdf_renderer_new(doc, &opts, &r, &err) == BDF_OK);
+    for (size_t i = 0; i < RV_TEXT_RENDERS; i++) {
+      if (rv_text_render[i].doc != d) {
+        continue;
+      }
+      bdf_image img;
+      bdf_status st;
+      if (rv_text_render[i].scale > 0) {
+        st = bdf_render_page(r, rv_text_render[i].view, rv_text_render[i].page, rv_text_render[i].scale, &img,
+                             &err);
+      } else {
+        st = bdf_render_region(r, rv_text_render[i].view, rv_text_render[i].page, rv_text_render[i].region,
+                               rv_text_render[i].w, rv_text_render[i].h, &img, &err);
+      }
+      if (st != BDF_OK) {
+        failures++;
+        fprintf(stderr, "text document %zu, render %zu: %s\n", d, i, err.message);
+        continue;
+      }
+      if (img.width != rv_text_render[i].w || img.height != rv_text_render[i].h) {
+        failures++;
+        fprintf(stderr, "text document %zu, render %zu: %d×%d, want %d×%d\n", d, i, img.width, img.height,
+                rv_text_render[i].w, rv_text_render[i].h);
+      } else if (fnv(img.pixels, 4 * (size_t)img.width * (size_t)img.height) != rv_text_render[i].hash) {
+        failures++;
+        fprintf(stderr, "text document %zu, render %zu: the pixels are not those the reference draws\n", d, i);
+      }
+      bdf_image_free(&img);
+    }
+    bdf_renderer_free(r);
+    bdf_doc_free(doc);
+  }
+  bdf_fonts_free(fonts);
+}
+
+static void add_part(docb *d, uint32_t id, const char *type, const void *bytes, size_t n) {
+  wr w = {0};
+  w_bytes(&w, bytes, n);
+  docb_add(d, id, type, &w);
+}
+
+/* Text in a font whose glyphs are boxes (render_vectors.h says which): where
+ * a string is drawn, aligned, on which baseline, spaced, fitted to an
+ * advance, in a face made bold or slanted, stroked; in a font the document
+ * carries and in one the renderer is given; and what is said of the fonts
+ * that cannot be drawn with. */
+static void test_text(void) {
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  bdf_image img;
+  add_part(&d, 1, "font", rv_font_boxes, sizeof rv_font_boxes);
+  add_part(&d, 2, "font", "wOFF and nothing more", 21);
+  add_part(&d, 3, "font", rv_font_boxes, 100); /* cut short */
+
+  /* 20: the font the document carries */
+  ob a = {0};
+  size_t boxes = ob_font_part(&a, 1, 400, BDF_STYLE_NORMAL);
+  ob_set_font(&a, boxes, 10);
+  ob_text(&a, "AB", 0, 10, 0);
+  ob_text_style(&a, BDF_ALIGN_RIGHT, BDF_BASELINE_ALPHABETIC, BDF_DIR_INHERIT, 0);
+  ob_text(&a, "B", 30, 28, 0);
+  ob_text_style(&a, BDF_ALIGN_LEFT, BDF_BASELINE_TOP, BDF_DIR_INHERIT, 0);
+  ob_text(&a, "B", 20, 0, 0);
+  ob_text_style(&a, BDF_ALIGN_LEFT, BDF_BASELINE_ALPHABETIC, BDF_DIR_INHERIT, 2);
+  ob_text(&a, "AB", 0, 28, 0);
+  docb_object(&d, 20, &a);
+
+  /* 21: fitted to an advance, bold, slanted, stroked */
+  ob b = {0};
+  size_t plain = ob_font_part(&b, 1, 400, BDF_STYLE_NORMAL);
+  size_t bold = ob_font_part(&b, 1, 700, BDF_STYLE_NORMAL);
+  size_t slanted = ob_font_part(&b, 1, 400, BDF_STYLE_ITALIC);
+  ob_set_font(&b, plain, 10);
+  ob_text(&b, "A", 0, 10, 20);
+  ob_set_font(&b, bold, 10);
+  ob_text(&b, "A", 20, 10, 0);
+  ob_set_font(&b, slanted, 10);
+  ob_text(&b, "A", 0, 28, 0);
+  ob_set_font(&b, plain, 10);
+  ob_stroke_text(&b, "A", 20, 28, 0);
+  docb_object(&d, 21, &b);
+
+  /* 22: a font by name, and one that is not there */
+  ob c = {0};
+  ob_set_font(&c, ob_font(&c, "'Boxes', serif"), 10);
+  ob_text(&c, "A", 0, 10, 0);
+  ob_set_font(&c, ob_font(&c, "No Such Family"), 10);
+  ob_text(&c, "A", 10, 10, 0);
+  docb_object(&d, 22, &c);
+
+  /* 23: fonts that cannot be drawn with */
+  ob e = {0};
+  for (uint32_t id = 2; id <= 4; id++) {
+    ob_set_font(&e, ob_font_part(&e, id, 400, BDF_STYLE_NORMAL), 10); /* 4 is not there */
+    ob_text(&e, "A", 0, 10, 0);
+  }
+  docb_object(&d, 23, &e);
+
+  char views[1024], n20[33], n21[33], n22[33], n23[33];
+  part_name(20, n20);
+  part_name(21, n21);
+  part_name(22, n22);
+  part_name(23, n23);
+  snprintf(views, sizeof views,
+           "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":["
+           "{\"w\":30,\"h\":30,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":40,\"h\":30,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":20,\"h\":12,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":20,\"h\":12,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]}]",
+           n20, n21, n22, n23);
+  bdf_doc *doc = docb_open(&d, views, &keep);
+  bdf_renderer *r = NULL;
+  CHECK(bdf_renderer_new(doc, NULL, &r, &err) == BDF_OK);
+  const uint32_t ink = 0x000000ff, paper = 0xffffffff;
+
+  CHECK(bdf_render_page(r, 0, 0, 1, &img, &err) == BDF_OK);
+  /* "AB" on the baseline y = 10: A is 8 wide and 7 high from x = 1 */
+  CHECK(pixel(&img, 1, 3) == ink && pixel(&img, 8, 9) == ink && pixel(&img, 0, 5) == paper && pixel(&img, 9, 5) == paper);
+  CHECK(pixel(&img, 5, 2) == paper && pixel(&img, 5, 10) == paper);
+  /* and B after its advance of 10: 5 wide, from 2 below the baseline to 8 above */
+  CHECK(pixel(&img, 10, 2) == ink && pixel(&img, 14, 11) == ink && pixel(&img, 15, 5) == paper);
+  CHECK(pixel(&img, 10, 12) == paper && pixel(&img, 10, 1) == paper);
+  /* "B" that ends at x = 30 on the baseline y = 28 */
+  CHECK(pixel(&img, 25, 20) == ink && pixel(&img, 29, 29) == ink && pixel(&img, 24, 25) == paper);
+  /* "B" hanging from the top of its em box at y = 0: the baseline is 8 below */
+  CHECK(pixel(&img, 20, 0) == ink && pixel(&img, 24, 9) == ink && pixel(&img, 20, 10) == paper && pixel(&img, 25, 5) == paper);
+  /* "AB" spaced by 2: B starts at 12 */
+  CHECK(pixel(&img, 1, 21) == ink && pixel(&img, 10, 25) == paper && pixel(&img, 11, 25) == paper && pixel(&img, 12, 25) == ink);
+  CHECK(pixel(&img, 16, 25) == ink && pixel(&img, 17, 25) == paper);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+
+  CHECK(bdf_render_page(r, 0, 1, 1, &img, &err) == BDF_OK);
+  /* "A" of an advance of 10 fitted to 20: twice as wide, and no higher */
+  CHECK(pixel(&img, 2, 3) == ink && pixel(&img, 17, 9) == ink && pixel(&img, 1, 5) == paper && pixel(&img, 18, 5) == paper);
+  CHECK(pixel(&img, 9, 2) == paper);
+  /* made bold: the box is its own, and the pixels around it are shaded */
+  CHECK(pixel(&img, 21, 3) == ink && pixel(&img, 28, 9) == ink);
+  CHECK(pixel(&img, 20, 6) != paper && pixel(&img, 20, 6) != ink && pixel(&img, 29, 6) != paper && pixel(&img, 24, 2) != paper);
+  CHECK(pixel(&img, 19, 6) == paper && pixel(&img, 24, 1) == paper);
+  /* slanted by a quarter of the height: the top row is 1.5 to 1.75 to the
+   * right of the baseline, where the box stands on x = 1 to 9 */
+  CHECK(pixel(&img, 0, 27) == paper && pixel(&img, 1, 27) != paper && pixel(&img, 2, 27) == ink && pixel(&img, 10, 27) == paper);
+  CHECK(pixel(&img, 1, 21) == paper && pixel(&img, 2, 21) != paper && pixel(&img, 2, 21) != ink && pixel(&img, 3, 21) == ink);
+  CHECK(pixel(&img, 9, 21) == ink && pixel(&img, 10, 21) != paper && pixel(&img, 10, 21) != ink && pixel(&img, 11, 21) == paper);
+  /* stroked: a line one wide around the box, half of it on either side */
+  CHECK(pixel(&img, 25, 24) == paper && pixel(&img, 20, 24) == pixel(&img, 21, 24) && pixel(&img, 20, 24) != paper);
+  CHECK(pixel(&img, 20, 24) != ink && pixel(&img, 22, 24) == paper && pixel(&img, 19, 24) == paper);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+
+  /* without fonts, text that names its font is not drawn */
+  CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 5, 6) == paper && pixel(&img, 15, 6) == paper);
+  CHECK(warned(r, "no font for \"'Boxes', serif\": its text is not drawn"));
+  CHECK(warned(r, "no font for \"No Such Family\": its text is not drawn"));
+  CHECK(bdf_renderer_warning_count(r) == 2);
+  bdf_image_free(&img);
+  CHECK(bdf_render_page(r, 0, 3, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 5, 6) == paper);
+  CHECK(warned(r, "WOFF 1 fonts are not drawn"));
+  CHECK(warned(r, "font 00000003000000000000000000000000 cannot be read"));
+  CHECK(warned(r, "font 00000004000000000000000000000000 is missing"));
+  CHECK(warned(r, "no font for \"\": its text is not drawn"));
+  CHECK(bdf_renderer_warning_count(r) == 6);
+  bdf_image_free(&img);
+  bdf_renderer_free(r);
+
+  /* with the font: by its name, and in place of a family that is not there */
+  bdf_fonts *fonts = NULL;
+  CHECK(bdf_fonts_new(&fonts, &err) == BDF_OK);
+  CHECK(bdf_fonts_add(fonts, rv_font_boxes, 100, &err) == BDF_ERR_FORMAT);
+  CHECK(bdf_fonts_add(fonts, (const uint8_t *)"no font", 7, &err) == BDF_ERR_FORMAT);
+  CHECK(bdf_fonts_add_file(fonts, "/no/such/font.ttf", &err) == BDF_ERR_FORMAT);
+  CHECK(bdf_fonts_count(fonts) == 0);
+  CHECK(bdf_fonts_add(fonts, rv_font_boxes, sizeof rv_font_boxes, &err) == BDF_OK);
+  CHECK(bdf_fonts_count(fonts) == 1);
+  CHECK(bdf_fonts_new(NULL, &err) == BDF_ERR_ARG && bdf_fonts_add(NULL, rv_font_boxes, 1, &err) == BDF_ERR_ARG);
+  CHECK(bdf_fonts_count(NULL) == 0);
+  bdf_render_options opts = {0, 0, fonts};
+  CHECK(bdf_renderer_new(doc, &opts, &r, &err) == BDF_OK);
+  CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 1, 3) == ink && pixel(&img, 8, 9) == ink && pixel(&img, 9, 5) == paper);
+  CHECK(pixel(&img, 11, 3) == ink && pixel(&img, 18, 9) == ink && pixel(&img, 19, 5) == paper);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+  /* and a font that cannot be read is drawn in its stead */
+  CHECK(bdf_render_page(r, 0, 3, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 1, 3) == ink && pixel(&img, 8, 9) == ink);
+  CHECK(bdf_renderer_warning_count(r) == 3);
+  bdf_image_free(&img);
+  bdf_renderer_free(r);
+  bdf_fonts_free(fonts);
+  bdf_fonts_free(NULL);
+  bdf_doc_free(doc);
+  free(keep.b);
+}
+
 static void test_pixels(void) {
   bdf_error err;
   bdf_image img;
@@ -161,7 +387,7 @@ static void test_pixels(void) {
   bdf_image_free(&img);
 
   /* at twice the scale, on a background */
-  bdf_render_options white = {1, 0xffffffff};
+  bdf_render_options white = {1, 0xffffffff, NULL};
   CHECK(bdf_render_object(obj, 2, &white, &img, &err) == BDF_OK);
   CHECK(img.width == 20 && img.height == 20);
   CHECK(pixel(&img, 0, 0) == 0xffffffff && pixel(&img, 6, 7) == 0xff0000ff && pixel(&img, 11, 15) == 0xff0000ff);
@@ -242,15 +468,6 @@ static const uint8_t png_gray[68] = {
     0x01, 0x02, 0x01, 0x00, 0xd1, 0x1a, 0xcb, 0x8f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
     0xae, 0x42, 0x60, 0x82,
 };
-
-static int warned(const bdf_renderer *r, const char *what) {
-  for (size_t i = 0; i < bdf_renderer_warning_count(r); i++) {
-    if (strstr(bdf_renderer_warning(r, i), what)) {
-      return 1;
-    }
-  }
-  return 0;
-}
 
 static void add_image(docb *d, uint32_t id, const void *bytes, size_t n) {
   wr w = {0};
@@ -433,7 +650,8 @@ static void test_pages(void) {
   CHECK(pixel(&img, 8, 0) == 0x0000ffff && pixel(&img, 11, 3) == 0x0000ffff && pixel(&img, 7, 0) == 0xffffffff);
   CHECK(bdf_renderer_warning_count(r) == 2);
   CHECK(strstr(bdf_renderer_warning(r, 0), "is missing") != NULL);
-  CHECK(strcmp(bdf_renderer_warning(r, 1), "text is not drawn") == 0);
+  /* the text is in the font of a canvas, and the renderer was given no fonts */
+  CHECK(strcmp(bdf_renderer_warning(r, 1), "no font for \"sans-serif\": its text is not drawn") == 0);
   CHECK(strcmp(bdf_renderer_warning(r, 2), "") == 0);
   bdf_image_free(&img);
   CHECK(bdf_render_page(r, 0, 1, 2, &img, &err) == BDF_OK);
@@ -518,5 +736,7 @@ int main(void) {
   test_reference_objects();
   test_reference_document();
   test_reference_images();
+  test_text();
+  test_reference_text();
   return finish();
 }

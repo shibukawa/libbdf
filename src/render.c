@@ -80,6 +80,7 @@ static void bdfi_robj_clear(bdfi_robj *o) {
   free(o->luts);
   bdf_paths_free(o->coll);
   bdf_free(o->coll_data);
+  bdfi_face_free(o->font);
   bdf_object_free(o->owned);
   memset(o, 0, sizeof *o);
 }
@@ -97,6 +98,7 @@ void bdf_renderer_free(bdf_renderer *r) {
     bdfi_picture_free(r->kept[i]);
   }
   free(r->kept);
+  bdfi_r_fonts_free(r);
   for (size_t i = 0; i < r->nwarnings; i++) {
     free(r->warnings[i]);
   }
@@ -114,6 +116,7 @@ static bdf_renderer *bdfi_renderer_alloc(const bdf_doc *doc, const bdf_render_op
   if (opts) {
     r->has_background = opts->has_background;
     r->background = opts->background;
+    r->fonts = opts->fonts;
   }
   r->sc.r = r;
   r->room = BDF_MAX_PICTURE_PIXELS;
@@ -136,7 +139,7 @@ bdf_status bdf_renderer_new(const bdf_doc *doc, const bdf_render_options *opts, 
 }
 
 /* The slot of a part: the parts of a document may grow (segments). */
-static bdfi_robj *bdfi_r_part(struct bdf_renderer *r, const uint8_t hash[16]) {
+bdfi_robj *bdfi_r_part_slot(struct bdf_renderer *r, const uint8_t hash[16]) {
   if (!r->doc) {
     return NULL;
   }
@@ -165,7 +168,7 @@ static void bdfi_hex(const uint8_t hash[16], char out[33]) { bdf_hash_format(has
 
 bdfi_robj *bdfi_r_object(struct bdf_renderer *r, const uint8_t hash[16]) {
   char name[33];
-  bdfi_robj *o = bdfi_r_part(r, hash);
+  bdfi_robj *o = bdfi_r_part_slot(r, hash);
   if (!o) {
     if (!r->oom) {
       bdfi_hex(hash, name);
@@ -227,7 +230,7 @@ static int bdfi_r_make_room(struct bdf_renderer *r, int64_t n) {
 
 bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
   char name[33];
-  bdfi_robj *o = bdfi_r_part(r, hash);
+  bdfi_robj *o = bdfi_r_part_slot(r, hash);
   if (!o) {
     if (!r->oom) {
       bdfi_hex(hash, name);
@@ -321,7 +324,7 @@ bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
 /* The paths of a path collection part, or NULL. */
 static const bdf_paths *bdfi_r_collection(struct bdf_renderer *r, const uint8_t hash[16]) {
   char name[33];
-  bdfi_robj *o = bdfi_r_part(r, hash);
+  bdfi_robj *o = bdfi_r_part_slot(r, hash);
   if (!o) {
     if (!r->oom) {
       bdfi_hex(hash, name);

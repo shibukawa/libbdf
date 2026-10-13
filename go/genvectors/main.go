@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 
 	"github.com/shibukawa/bdf"
@@ -461,7 +462,85 @@ func renderVectors(path string) {
 	o.bytes("rv_image_documents", all)
 	o.b.WriteString("static const struct {\n  size_t off, len;\n  const char *format;\n} rv_image_document[RV_IMAGE_DOCUMENTS] = {\n" + strings.Join(docRows, "\n") + "\n};\n\n")
 	o.comment("what the reference draws of them: the document, and the rest as in rv_render")
-	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_image_render[RV_IMAGE_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
+	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_image_render[RV_IMAGE_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n\n")
+
+	// text: fonts made for the tests, which documents carry and name
+	made := cbdf.TestFonts(20261013)
+	var fontNames []string
+	for name := range made {
+		fontNames = append(fontNames, name)
+	}
+	sort.Strings(fontNames)
+	fontDir := must(os.MkdirTemp("", "libbdf-fonts"))
+	defer os.RemoveAll(fontDir)
+	all, rows = nil, nil
+	var programs [][]byte
+	for _, name := range fontNames {
+		if err := os.WriteFile(filepath.Join(fontDir, name), made[name], 0o644); err != nil {
+			log.Fatal(err)
+		}
+		rows = append(rows, fmt.Sprintf("    {%d, %d, %q},", len(all), len(made[name]), name))
+		all = append(all, made[name]...)
+		programs = append(programs, made[name])
+	}
+	fmt.Fprintf(&o.b, "#define RV_FONTS %d\n", len(fontNames))
+	o.comment("fonts made for the tests (go/fontbuild.go), one after the other in the order a renderer is given them:\n * where each starts, how long it is, and the name of its file")
+	o.bytes("rv_fonts", all)
+	o.b.WriteString("static const struct {\n  size_t off, len;\n  const char *name;\n} rv_font[RV_FONTS] = {\n" + strings.Join(rows, "\n") + "\n};\n\n")
+	// a font whose glyphs are boxes, for the pixels that are told by hand:
+	// 'A' is 0.8 em wide and 0.7 em high on the baseline with 0.1 em beside
+	// it, 'B' half an em wide and the whole line high
+	box := func(x0, y0, x1, y1 int) []cbdf.FontSeg {
+		return []cbdf.FontSeg{{Kind: 'M', X: x0, Y: y0}, {Kind: 'L', X: x0, Y: y1}, {Kind: 'L', X: x1, Y: y1}, {Kind: 'L', X: x1, Y: y0}}
+	}
+	o.comment("a font of boxes, \"Boxes\": 'A' is the box (0.1, 0) to (0.9, 0.7) em and advances an em, 'B' the box\n * (0, -0.2) to (0.5, 0.8) em and advances half an em, as a space does; the ascent is 0.8 em, the descent 0.2")
+	o.bytes("rv_font_boxes", cbdf.BuildTTF(cbdf.FontSpec{Family: "Boxes", Style: "Regular", Weight: 400, UnitsPerEm: 1000, Ascent: 800, Descent: -200,
+		Glyphs: []cbdf.FontGlyph{{Advance: 500}, {Advance: 1000, Path: box(100, 0, 900, 700)}, {Advance: 500, Path: box(0, -200, 500, 800)}, {Advance: 500}},
+		Cmap:   map[rune]int{'A': 1, 'B': 2, ' ': 3}}))
+	all, rows, docRows = nil, nil, nil
+	for di := 0; di < 3; di++ {
+		for {
+			doc = cbdf.RandomTextDocument(r, programs)
+			file.Reset()
+			if err := doc.WriteSingle(&file); err != nil {
+				log.Fatal(err)
+			}
+			carried := 0
+			for _, p := range doc.Parts() {
+				if p.Type == bdf.PartFont {
+					carried++
+				}
+			}
+			if file.Len() < 14<<10 && carried >= 1 && len(doc.Views[0].Pages) >= 2 {
+				break
+			}
+		}
+		read = must(must(bdf.OpenSingle(bytes.NewReader(file.Bytes()), int64(file.Len()))).ToDocument())
+		ref = imagebdf.New(read, &imagebdf.Options{FontDirs: []string{fontDir}, NoSystemFonts: true})
+		docRows = append(docRows, fmt.Sprintf("    {%d, %d},", len(all), file.Len()))
+		all = append(all, file.Bytes()...)
+		drawText := func(view, page int, scale float64, region bdf.Rect, w, h int) {
+			var img *image.RGBA
+			if scale > 0 {
+				img = must(ref.Page(read.Views[view], page, scale))
+			} else {
+				img = must(ref.Region(read.Views[view], page, region, w, h))
+			}
+			rows = append(rows, fmt.Sprintf("    {%d, %d, %d, %v, {%v, %v, %v, %v}, %d, %d, 0x%016xull},", di, view, page, scale,
+				region.X, region.Y, region.W, region.H, img.Rect.Dx(), img.Rect.Dy(), fnv(img.Pix)))
+		}
+		for pi := range read.Views[0].Pages {
+			drawText(0, pi, []float64{1, 0.5, 2.5}[pi%3], bdf.Rect{}, 0, 0)
+			drawText(0, pi, 0, bdf.Rect{X: 13, Y: 7.5, W: 90, H: 71}, 135, 99)
+		}
+		drawText(1, 0, 0, bdf.Rect{X: 0, Y: 0, W: 200, H: 300}, 100, 150)
+	}
+	fmt.Fprintf(&o.b, "#define RV_TEXT_DOCUMENTS %d\n#define RV_TEXT_RENDERS %d\n", len(docRows), len(rows))
+	o.comment("random documents that draw text, in fonts they carry and in the fonts above by name, one after the\n * other: where each starts and how long it is")
+	o.bytes("rv_text_documents", all)
+	o.b.WriteString("static const struct {\n  size_t off, len;\n} rv_text_document[RV_TEXT_DOCUMENTS] = {\n" + strings.Join(docRows, "\n") + "\n};\n\n")
+	o.comment("what the reference draws of them with the fonts above: the document, and the rest as in rv_render")
+	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_text_render[RV_TEXT_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
 	o.write(path, "random drawings and random documents with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
 }
 

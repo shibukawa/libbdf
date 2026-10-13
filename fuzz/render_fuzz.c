@@ -29,7 +29,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   if (size < 2) {
     return 0;
   }
-  bdf_render_options opts = {data[0] & 1, data[0] & 2 ? 0xffffffffu : 0x20408080u};
+  bdf_render_options opts = {data[0] & 1, data[0] & 2 ? 0xffffffffu : 0x20408080u, NULL};
   double scale = 0.25 + (double)(data[0] >> 2 & 7) * 0.25;
   data++;
   size--;

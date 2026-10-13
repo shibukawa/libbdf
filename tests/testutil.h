@@ -167,6 +167,22 @@ static inline size_t ob_font(ob *o, const char *family) {
   return o->nfonts++;
 }
 
+/* ob_font_part adds a font that is the part id (see ob_child), to be drawn
+ * at a weight and in a style. */
+static inline size_t ob_font_part(ob *o, uint32_t id, uint16_t weight, uint8_t style) {
+  uint8_t h[16] = {0};
+  h[0] = (uint8_t)(id >> 24);
+  h[1] = (uint8_t)(id >> 16);
+  h[2] = (uint8_t)(id >> 8);
+  h[3] = (uint8_t)id;
+  w_u8(&o->fonts, BDF_FONT_EMBEDDED);
+  w_bytes(&o->fonts, h, sizeof h);
+  w_str(&o->fonts, "");
+  w_u16(&o->fonts, weight);
+  w_u8(&o->fonts, style);
+  return o->nfonts++;
+}
+
 /* ob_rect_path adds an inline path of one unit square. */
 static inline size_t ob_rect_path(ob *o) {
   w_u8(&o->paths, 0);
@@ -257,6 +273,24 @@ static inline void ob_set_font(ob *o, size_t font, float size) {
   ob_op(o, BDF_OP_FONT);
   w_varuint(&o->ops, font);
   w_f32(&o->ops, size);
+}
+
+static inline void ob_text_style(ob *o, uint8_t align, uint8_t baseline, uint8_t dir, float spacing) {
+  ob_op(o, BDF_OP_TEXT_STYLE);
+  w_u8(&o->ops, align);
+  w_u8(&o->ops, baseline);
+  w_u8(&o->ops, dir);
+  w_f32(&o->ops, spacing);
+}
+
+/* ob_stroke_text is ob_text with the outlines of the glyphs. */
+static inline void ob_stroke_text(ob *o, const char *text, float x, float y, float advance) {
+  size_t s = ob_str(o, text);
+  ob_op(o, BDF_OP_STROKE_TEXT);
+  w_varuint(&o->ops, s);
+  w_f32(&o->ops, x);
+  w_f32(&o->ops, y);
+  w_f32(&o->ops, advance);
 }
 
 static inline void ob_align(ob *o, uint8_t align) {

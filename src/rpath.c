@@ -757,3 +757,27 @@ int bdfi_hidden(bdfi_rpath *p, double reach, const bdfi_mat *m, bdfi_irect bound
   double box[4];
   return bdfi_rpath_extent(p, box) && bdfi_outside(box, reach, m, bounds);
 }
+
+/* boxUnder: the bounds of a box under a transform (a NaN makes it one). */
+void bdfi_box_under(const double box[4], const bdfi_mat *m, double out[4]) {
+  const double cx[4] = {box[0], box[2], box[0], box[2]};
+  const double cy[4] = {box[1], box[1], box[3], box[3]};
+  double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+  for (int i = 0; i < 4; i++) {
+    bdfi_pt p = bdfi_mat_pt(m, cx[i], cy[i]);
+    if (bdfi_isnan(p.x) || bdfi_isnan(p.y)) {
+      out[0] = out[2] = p.x;
+      out[1] = out[3] = p.y;
+      return;
+    }
+    x0 = bdfi_fmin(x0, p.x);
+    y0 = bdfi_fmin(y0, p.y);
+    x1 = bdfi_fmax(x1, p.x);
+    y1 = bdfi_fmax(y1, p.y);
+  }
+  out[0] = x0;
+  out[1] = y0;
+  out[2] = x1;
+  out[3] = y1;
+}
+

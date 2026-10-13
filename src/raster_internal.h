@@ -214,6 +214,7 @@ BDF_INTERNAL void bdfi_rpath_flatten(const bdfi_rpath *p, bdfi_scratch *sc, cons
 BDF_INTERNAL int bdfi_outside(const double box[4], double reach, const bdfi_mat *m,
                               bdfi_irect bounds);
 BDF_INTERNAL int bdfi_hidden(bdfi_rpath *p, double reach, const bdfi_mat *m, bdfi_irect bounds);
+BDF_INTERNAL void bdfi_box_under(const double box[4], const bdfi_mat *m, double out[4]);
 
 /* ---- Coverage ------------------------------------------------------------ */
 
@@ -237,6 +238,8 @@ BDF_INTERNAL size_t bdfi_mask_bytes(const bdfi_mask *m);
 /* The coverage of pixels [x0, x1) of row y, or NULL for full coverage. */
 BDF_INTERNAL const float *bdfi_mask_row(const bdfi_mask *m, int y, int x0);
 BDF_INTERNAL bdfi_mask *bdfi_mask_intersect(const bdfi_mask *a, const bdfi_mask *b);
+BDF_INTERNAL bdfi_irect bdfi_irect_union(bdfi_irect r, bdfi_irect s);
+BDF_INTERNAL bdfi_mask *bdfi_mask_union(bdfi_mask *a, bdfi_mask *b);
 /* The exact coverage of an axis-aligned rectangle in device space. */
 BDF_INTERNAL bdfi_mask *bdfi_rect_mask(double x0, double y0, double x1, double y1,
                                        bdfi_irect bounds);
@@ -443,6 +446,97 @@ BDF_INTERNAL void bdfi_image_shader_init(bdfi_image_shader *s, bdfi_picture *img
                                          const bdfi_mat *inv, int smooth, double sx0, double sy0,
                                          double sx1, double sy1, int *oom);
 
+/* ---- Fonts --------------------------------------------------------------- */
+
+/* A font program read for drawing: its character map, its advances and the
+ * outlines of its glyphs (sfnt.c). */
+typedef struct bdfi_face bdfi_face;
+
+BDF_INTERNAL bdfi_face *bdfi_face_new(const uint8_t *data, size_t len, int index, int take,
+                                      bdf_status *status);
+BDF_INTERNAL void bdfi_face_free(bdfi_face *f);
+BDF_INTERNAL double bdfi_face_upem(const bdfi_face *f);
+BDF_INTERNAL double bdfi_face_ascent(const bdfi_face *f);
+BDF_INTERNAL double bdfi_face_descent(const bdfi_face *f);
+BDF_INTERNAL uint16_t bdfi_face_glyph(const bdfi_face *f, uint32_t rune);
+BDF_INTERNAL double bdfi_face_advance(const bdfi_face *f, uint16_t gid);
+BDF_INTERNAL bdfi_rpath *bdfi_face_outline(bdfi_face *f, uint16_t gid, int *oom);
+BDF_INTERNAL int bdfi_face_has_metrics(const bdfi_face *f);
+
+/* The generic families (fontdb.Sans, Serif and Mono). */
+enum { BDFI_GENERIC_SANS, BDFI_GENERIC_SERIF, BDFI_GENERIC_MONO };
+
+/* A family request mapped to a face of the application's fonts
+ * (fontdb.Resolved): the face is SIZE_MAX when there is none. */
+typedef struct bdfi_resolved {
+  size_t face;
+  int synth_bold, synth_italic; /* what the renderer has to fake */
+  int generic;                  /* the generic family of the request */
+} bdfi_resolved;
+
+BDF_INTERNAL int bdfi_fonts_family(const bdf_fonts *db, const char *name, size_t n, int bold,
+                                   int italic, bdfi_resolved *out);
+BDF_INTERNAL int bdfi_fonts_resolve(const bdf_fonts *db, const char *family, size_t n, int bold,
+                                    int italic, bdfi_resolved *res);
+BDF_INTERNAL int bdfi_fonts_fallbacks(const bdf_fonts *db, int generic, int bold, int italic,
+                                      bdfi_resolved **out, size_t *n);
+BDF_INTERNAL int bdfi_fonts_index(const bdf_fonts *db, size_t face);
+BDF_INTERNAL int bdfi_fonts_read(const bdf_fonts *db, size_t face, const uint8_t **data,
+                                 size_t *len, int *owned);
+BDF_INTERNAL int bdfi_fonts_cmap(const bdf_fonts *db, size_t face, const uint8_t **data,
+                                 size_t *len, int *owned);
+BDF_INTERNAL int bdfi_fonts_has_cmap(const bdf_fonts *db, size_t face);
+
+/* The Unicode subtable of a cmap table, for asking which characters a font
+ * has (sfnt.CmapCoverage). */
+typedef struct bdfi_coverage {
+  const uint8_t *data;
+  size_t len;
+  uint32_t format;
+} bdfi_coverage;
+
+BDF_INTERNAL int bdfi_coverage_parse(const uint8_t *t, size_t len, bdfi_coverage *cov);
+BDF_INTERNAL int bdfi_coverage_has(const bdfi_coverage *c, uint32_t code);
+
+/* A face with the styles a browser would synthesize for it. */
+typedef struct bdfi_face_use {
+  bdfi_face *face;
+  int bold, italic;
+} bdfi_face_use;
+
+/* The faces a FONT instruction draws with, in the order characters are
+ * looked up in them (fontChain). The families of the application's fonts
+ * are looked for only when a character is not in the faces it has. */
+typedef struct bdfi_chain {
+  uint8_t kind, style; /* the font it is the chain of */
+  uint16_t weight;
+  uint8_t hash[16];
+  char *family;
+  size_t family_len;
+  int bold, italic;
+  bdfi_face_use *faces;
+  size_t nfaces, cap_faces;
+  int inited;
+  bdfi_resolved *fallbacks;
+  size_t nfallbacks;
+} bdfi_chain;
+
+/* A glyph placed along the baseline: x is the pen position in units. */
+typedef struct bdfi_placed {
+  bdfi_face_use use;
+  uint16_t gid;
+  double x;
+} bdfi_placed;
+
+struct bdf_renderer;
+BDF_INTERNAL bdfi_chain *bdfi_r_chain(struct bdf_renderer *r, const bdf_font *f);
+BDF_INTERNAL int bdfi_chain_layout(struct bdf_renderer *r, bdfi_chain *c, const char *text,
+                                   size_t len, double size, double spacing, int rtl,
+                                   bdfi_placed **out, size_t *count, double *width);
+BDF_INTERNAL double bdfi_chain_baseline_shift(const bdfi_chain *c, uint8_t baseline, double size);
+BDF_INTERNAL double bdfi_fake_bold_width(double size);
+BDF_INTERNAL void bdfi_r_fonts_free(struct bdf_renderer *r);
+
 /* ---- The renderer -------------------------------------------------------- */
 
 /* What a renderer keeps of an object: the object, and what was made of its
@@ -461,6 +555,8 @@ typedef struct bdfi_robj {
   uint8_t coll_state;
   bdfi_picture *pic; /* the part as an image (the renderer's kept list owns it) */
   uint8_t pic_state; /* 0: not asked for; 1: there; 2: none (not decodable) */
+  bdfi_face *font;    /* the part as a font */
+  uint8_t font_state; /* 0: not asked for; 1: there; 2: none (not readable) */
 } bdfi_robj;
 
 /*
@@ -486,6 +582,13 @@ struct bdf_renderer {
   size_t nkept, cap_kept;
   int64_t pixels, room; /* of the pictures kept, and the most of them */
   uint64_t drawing;     /* counts the images drawn */
+  const bdf_fonts *fonts;    /* the application's fonts, or NULL */
+  struct bdfi_rfile *files;  /* what was read of their faces, by face */
+  size_t nfiles;
+  bdfi_chain **chains; /* the faces of the fonts drawn with */
+  size_t nchains, cap_chains;
+  size_t *chain_slots; /* where they are found: by a hash of the font, the number of a chain and one */
+  size_t nchain_slots; /* a power of two, or 0 */
   char **warnings;
   size_t nwarnings, cap_warnings;
   bdfi_scratch sc;
@@ -500,6 +603,9 @@ BDF_INTERNAL bdfi_rpath *bdfi_r_path(struct bdf_renderer *r, bdfi_robj *o, size_
 /* The colours of gradient i of an object, or NULL. */
 BDF_INTERNAL const bdfi_lut *bdfi_r_lut(struct bdf_renderer *r, bdfi_robj *o, size_t i,
                                         const bdf_paint *p);
+/* The slot of a part in what the renderer keeps, or NULL for a part that is
+ * not there. */
+BDF_INTERNAL bdfi_robj *bdfi_r_part_slot(struct bdf_renderer *r, const uint8_t hash[16]);
 /* The picture of an image part, or NULL: for one that is missing or cannot
  * be decoded (warned of once), and for an SVG image. */
 BDF_INTERNAL bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]);

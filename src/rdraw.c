@@ -439,6 +439,198 @@ static void bdfi_draw_image(bdfi_drawer *d, uint64_t i, const double *src, doubl
   bdfi_mask_unref(cov);
 }
 
+/* ---- Text ---------------------------------------------------------------- */
+
+/* fakeItalicSkew: the slant of a synthesized italic (x for a unit of height). */
+#define BDFI_FAKE_ITALIC_SKEW 0.25
+
+/* The matrix of a glyph: at its pen position, scaled from font units (y up)
+ * to the size, and slanted for a synthesized italic. */
+static bdfi_mat bdfi_glyph_matrix(bdfi_mat m, const bdfi_placed *g, double size) {
+  double k = size / bdfi_face_upem(g->use.face);
+  m = bdfi_mat_scale(bdfi_mat_translate(m, g->x, 0), k, -k);
+  if (g->use.italic) {
+    bdfi_mat skew = {{1, 0, BDFI_FAKE_ITALIC_SKEW, 1, 0, 0}};
+    m = bdfi_mat_mul2(m, skew);
+  }
+  return m;
+}
+
+/* strokeText: glyphs laid out under m stroked in user space, where the line
+ * width is in units. */
+static void bdfi_draw_stroke_text(bdfi_drawer *d, const bdfi_placed *glyphs, size_t n,
+                                  const bdfi_mat *m) {
+  bdfi_state *st = &d->ctx->st;
+  bdfi_scratch *sc = bdfi_r_scratch(d->r);
+  bdfi_irect bounds = bdfi_draw_bounds(d);
+  bdfi_line_style ls = st->line;
+  double scale = bdfi_mat_area_scale(m);
+  float alpha = 1;
+  double dw = ls.width * scale;
+  if (dw < 1 && scale > 0) {
+    alpha = (float)dw;
+    ls.width = 1 / scale;
+  }
+  double reach = ls.width / 2 * bdfi_fmax(BDFI_SQRT2, bdfi_miter_reach(&ls));
+  double ms = bdfi_mat_max_scale(m);
+  for (size_t i = 0; i < n; i++) {
+    bdfi_rpath *p = bdfi_face_outline(glyphs[i].use.face, glyphs[i].gid, &d->r->oom);
+    if (!p) {
+      continue;
+    }
+    bdfi_mat um = bdfi_glyph_matrix(bdfi_mat_identity(), &glyphs[i], st->size);
+    double box[4], under[4];
+    if (bdfi_rpath_extent(p, box)) {
+      bdfi_box_under(box, &um, under);
+      if (bdfi_outside(under, reach, m, bounds)) {
+        continue;
+      }
+    }
+    bdfi_rpath_flatten(p, sc, &um, BDFI_FLAT_TOL / bdfi_fmax(ms, 1e-9));
+    if (sc->limited || sc->oom) {
+      d->r->oom = d->r->oom || sc->oom;
+      return;
+    }
+  }
+  bdfi_stroker s;
+  bdfi_stroker_init(&s, &ls, ms);
+  bdfi_stroker_within(&s, m, bounds);
+  bdfi_stroker_stroke(&s, sc->pts, sc->polys, sc->npolys);
+  if (s.cut) {
+    bdfi_r_warn(d->r, bdfi_stroke_cut);
+  }
+  bdfi_mask *cov = NULL;
+  if (!s.oom) {
+    for (size_t i = 0; i < s.npts; i++) {
+      s.pts[i] = bdfi_mat_pt(m, s.pts[i].x, s.pts[i].y);
+    }
+    cov = bdfi_rasterize(sc, s.pts, s.out, s.nout, BDF_FILL_NONZERO, bounds);
+  }
+  bdfi_stroker_free(&s);
+  cov = bdfi_draw_made(d, cov);
+  bdfi_any_shader sh;
+  bdfi_draw_shader(d, &st->stroke, m, &sh);
+  bdfi_draw_paint(d, cov, &sh.base, alpha);
+  bdfi_mask_unref(cov);
+}
+
+/* text: a string drawn at (x, y), filled or stroked. With an advance, it is
+ * fitted to it when the fonts here give it another width. */
+static void bdfi_draw_text(bdfi_drawer *d, const char *s, size_t len, double x, double y,
+                           double advance, int stroke) {
+  bdfi_state *st = &d->ctx->st;
+  if (st->size <= 0 || len == 0) {
+    return;
+  }
+  bdf_font font;
+  int has_font = st->font_owner &&
+                 bdf_object_font(st->font_owner->obj, st->font_index, &font) == BDF_OK;
+  bdfi_chain *ch = bdfi_r_chain(d->r, has_font ? &font : NULL);
+  if (!ch) {
+    return;
+  }
+  bdfi_placed *glyphs;
+  size_t n;
+  double width;
+  if (bdfi_chain_layout(d->r, ch, s, len, st->size, st->spacing, st->dir == BDF_DIR_RTL, &glyphs,
+                        &n, &width) < 0 ||
+      n == 0) {
+    return;
+  }
+  bdfi_mat m = bdfi_mat_translate(st->m, x, y);
+  if (advance > 0 && width > 0 && fabs(width - advance) / advance > 0.005) {
+    m = bdfi_mat_scale(m, advance / width, 1);
+  }
+  switch (st->align) {
+  case BDF_ALIGN_RIGHT:
+    m = bdfi_mat_translate(m, -width, 0);
+    break;
+  case BDF_ALIGN_CENTER:
+    m = bdfi_mat_translate(m, -width / 2, 0);
+    break;
+  case BDF_ALIGN_END:
+    if (st->dir != BDF_DIR_RTL) {
+      m = bdfi_mat_translate(m, -width, 0);
+    }
+    break;
+  case BDF_ALIGN_START:
+    if (st->dir == BDF_DIR_RTL) {
+      m = bdfi_mat_translate(m, -width, 0);
+    }
+    break;
+  default:
+    break;
+  }
+  m = bdfi_mat_translate(m, 0, bdfi_chain_baseline_shift(ch, st->baseline, st->size));
+  if (stroke) {
+    bdfi_draw_stroke_text(d, glyphs, n, &m);
+    free(glyphs);
+    return;
+  }
+  bdfi_scratch *sc = bdfi_r_scratch(d->r);
+  bdfi_irect bounds = bdfi_draw_bounds(d);
+  bdfi_mat identity = bdfi_mat_identity();
+  /* a synthesized bold outlines what is filled, in device space */
+  double bold_w = bdfi_fake_bold_width(st->size * bdfi_mat_area_scale(&m));
+  bdfi_line_style bold_line;
+  memset(&bold_line, 0, sizeof bold_line);
+  bold_line.width = bold_w;
+  bold_line.join = BDF_JOIN_ROUND;
+  bold_line.miter = 10;
+  bdfi_stroker bold;
+  bdfi_stroker_init(&bold, &bold_line, 1);
+  bdfi_stroker_within(&bold, &identity, bounds);
+  int stopped = 0;
+  for (size_t i = 0; i < n && !stopped; i++) {
+    bdfi_rpath *p = bdfi_face_outline(glyphs[i].use.face, glyphs[i].gid, &d->r->oom);
+    if (!p) {
+      continue;
+    }
+    bdfi_mat gm = bdfi_glyph_matrix(m, &glyphs[i], st->size);
+    int thick = glyphs[i].use.bold && bold_w > 0;
+    double box[4], under[4];
+    if (bdfi_rpath_extent(p, box)) {
+      bdfi_box_under(box, &gm, under);
+      if (bdfi_outside(under, thick ? bold_w : 0, &identity, bounds)) {
+        continue;
+      }
+    }
+    size_t from = sc->npolys;
+    bdfi_rpath_flatten(p, sc, &gm, BDFI_FLAT_TOL);
+    if (sc->limited || sc->oom) {
+      stopped = 1;
+    } else if (thick) {
+      bdfi_stroker_stroke(&bold, sc->pts, sc->polys + from, sc->npolys - from);
+    }
+  }
+  free(glyphs);
+  if (stopped || bold.oom) {
+    d->r->oom = d->r->oom || sc->oom || bold.oom;
+    bdfi_stroker_free(&bold);
+    return;
+  }
+  if (bold.cut) {
+    bdfi_r_warn(d->r, bdfi_stroke_cut);
+  }
+  bdfi_mask *cov =
+      bdfi_draw_made(d, bdfi_rasterize(sc, sc->pts, sc->polys, sc->npolys, BDF_FILL_NONZERO, bounds));
+  if (bold.nout > 0) {
+    bdfi_mask *outline = bdfi_draw_made(
+        d, bdfi_rasterize(sc, bold.pts, bold.out, bold.nout, BDF_FILL_NONZERO, bounds));
+    bdfi_mask *both = bdfi_draw_made(d, bdfi_mask_union(cov, outline));
+    bdfi_mask_unref(cov);
+    bdfi_mask_unref(outline);
+    cov = both;
+  }
+  bdfi_stroker_free(&bold);
+  if (!sc->limited) {
+    bdfi_any_shader sh;
+    bdfi_draw_shader(d, &st->fill, &m, &sh);
+    bdfi_draw_paint(d, cov, &sh.base, 1);
+  }
+  bdfi_mask_unref(cov);
+}
+
 /* Strokes a path in user space under m. Strokes thinner than a device pixel
  * are drawn a pixel wide with their width as alpha, as Skia draws hairlines. */
 static void bdfi_draw_stroke_path(bdfi_drawer *d, bdfi_rpath *p, const bdfi_mat *m) {
@@ -1095,9 +1287,12 @@ static void bdfi_draw_instr(bdfi_drawer *d, const bdf_instr *in) {
     break;
   }
   case BDF_OP_FILL_TEXT:
-  case BDF_OP_STROKE_TEXT:
-    bdfi_r_warn(d->r, "text is not drawn");
+  case BDF_OP_STROKE_TEXT: {
+    size_t n = 0;
+    const char *s = bdf_instr_string(in, 0, &n);
+    bdfi_draw_text(d, s, n, F(1), F(2), F(3), op == BDF_OP_STROKE_TEXT);
     break;
+  }
   case BDF_OP_IMAGE:
     bdfi_draw_image(d, U(0), NULL, F(1), F(2), F(3), F(4));
     break;

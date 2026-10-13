@@ -9,6 +9,7 @@
 
 #include "bdf_internal.h"
 #include "unicode_nfc.h"
+#include "unicode_text.h"
 
 /* Bytes that are not UTF-8 pass through as they are, each as a character of
  * its own that combines with nothing. */
@@ -60,6 +61,27 @@ static const uint32_t *bdfi_nfd_of(uint32_t c, size_t *n) {
     } else {
       *n = bdfi_nfd_index[mid][2];
       return &bdfi_nfd_pool[bdfi_nfd_index[mid][1]];
+    }
+  }
+  return NULL;
+}
+
+/* bdfi_nfkd_of is bdfi_nfd_of for form KD: the full compatibility
+ * decomposition of a character whose is not the canonical one. */
+static const uint32_t *bdfi_nfkd_of(uint32_t c, size_t *n) {
+  if (c < 0xA0) {
+    return NULL;
+  }
+  size_t lo = 0, hi = sizeof bdfi_nfkd_index / sizeof bdfi_nfkd_index[0];
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (c < bdfi_nfkd_index[mid][0]) {
+      hi = mid;
+    } else if (c > bdfi_nfkd_index[mid][0]) {
+      lo = mid + 1;
+    } else {
+      *n = bdfi_nfkd_index[mid][2];
+      return &bdfi_nfkd_pool[bdfi_nfkd_index[mid][1]];
     }
   }
   return NULL;
@@ -282,7 +304,9 @@ static int bdfi_reorder(bdfi_cps *b) {
   return 0;
 }
 
-int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len) {
+/* Form C, or with compat form KC: the compatibility decompositions are
+ * taken first, and what they give composes as in form C. */
+static int bdfi_normalize(const char *s, size_t n, int compat, char **out, size_t *out_len) {
   *out = NULL;
   *out_len = 0;
   const uint8_t *b = (const uint8_t *)s;
@@ -327,8 +351,11 @@ int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len) {
       len = 1;
     }
     i += len;
-    size_t m;
-    const uint32_t *seq = bdfi_nfd_of(c, &m);
+    size_t m = 0;
+    const uint32_t *seq = compat ? bdfi_nfkd_of(c, &m) : NULL;
+    if (!seq) {
+      seq = bdfi_nfd_of(c, &m);
+    }
     if (seq) {
       for (size_t k = 0; k < m; k++) {
         if (bdfi_cps_push(&d, seq[k]) < 0) {
@@ -394,4 +421,105 @@ done:
   free(d.c);
   free(d.cc);
   return rc;
+}
+
+int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len) {
+  return bdfi_normalize(s, n, 0, out, out_len);
+}
+
+int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len) {
+  return bdfi_normalize(s, n, 1, out, out_len);
+}
+
+/* unicode.ToLower of the reference's language. */
+uint32_t bdfi_to_lower(uint32_t c) {
+  if (c < 0x80) {
+    return c >= 'A' && c <= 'Z' ? c + 32 : c;
+  }
+  size_t lo = 0, hi = sizeof bdfi_lower_pairs / sizeof bdfi_lower_pairs[0];
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (c < bdfi_lower_pairs[mid][0]) {
+      hi = mid;
+    } else if (c > bdfi_lower_pairs[mid][0]) {
+      lo = mid + 1;
+    } else {
+      return bdfi_lower_pairs[mid][1];
+    }
+  }
+  return c;
+}
+
+/* The direction of a character: 1 for right to left (the bidirectional
+ * classes R and AL), 0 for left to right (L, EN and AN), -1 for the others,
+ * which take the direction around them. */
+int bdfi_bidi_direction(uint32_t c) {
+  size_t lo = 0, hi = sizeof bdfi_bidi_ranges / sizeof bdfi_bidi_ranges[0];
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (c < bdfi_bidi_ranges[mid][0]) {
+      hi = mid;
+    } else if (c > bdfi_bidi_ranges[mid][1]) {
+      lo = mid + 1;
+    } else {
+      return (int)bdfi_bidi_ranges[mid][2];
+    }
+  }
+  return -1;
+}
+
+/* bdfi_utf8_rune decodes as the reference's language does: a byte that
+ * starts no character is U+FFFD, one byte long. */
+uint32_t bdfi_utf8_rune(const char *s, size_t n, size_t *len) {
+  uint32_t c;
+  *len = bdfi_utf8_decode((const uint8_t *)s, n, &c);
+  if (*len == 0) {
+    *len = 1;
+    return 0xFFFD;
+  }
+  return c;
+}
+
+/* Unicode's White_Space, as unicode.IsSpace has it. */
+int bdfi_go_is_space(uint32_t c) {
+  return (c >= 0x09 && c <= 0x0D) || c == 0x20 || c == 0x85 || c == 0xA0 || c == 0x1680 ||
+         (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F ||
+         c == 0x3000;
+}
+
+/*
+ * fontdb.Normalize: a family name folded for comparison: form KC (full-width
+ * letters become ASCII), lower case, without spaces, hyphens and
+ * underscores. The key is the caller's to free; -1 when out of memory.
+ */
+int bdfi_family_key(const char *name, size_t n, char **out, size_t *out_len) {
+  char *kc;
+  size_t kn;
+  *out = NULL;
+  *out_len = 0;
+  if (bdfi_nfkc(name, n, &kc, &kn) < 0) {
+    return -1;
+  }
+  /* a character is at most three bytes longer in lower case, and a byte
+   * that is no character becomes the three of U+FFFD */
+  char *key = bdfi_malloc_array(kn + 1, 3);
+  if (!key) {
+    free(kc);
+    return -1;
+  }
+  size_t w = 0;
+  for (size_t i = 0; i < kn;) {
+    size_t len;
+    uint32_t c = bdfi_to_lower(bdfi_utf8_rune(kc + i, kn - i, &len));
+    i += len;
+    if (c == ' ' || c == '-' || c == '_' || c == 0x3000) {
+      continue;
+    }
+    w += bdfi_utf8_encode(c, (uint8_t *)key + w);
+  }
+  key[w] = '\0';
+  free(kc);
+  *out = key;
+  *out_len = w;
+  return 0;
 }
