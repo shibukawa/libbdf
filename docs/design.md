@@ -91,7 +91,7 @@ bdf の `conformance` パッケージが、入力と「参照実装がそれを�
 
 事例は、ヘッダ（マジック、版、フラグ、予約バイト、manifest の範囲、deflate、暗号化フラグの整合）、manifest の数値の範囲、manifest の JSON（拒否するものと受け付けるもの）、Part の範囲と inflate の上限、書き手が作る文書、Object（切り詰めの全接頭辞、未知の opcode、巨大な個数、不正な参照）、パス集、そして testdata の全文書（受理）である。
 
-libbdf 側は `tests/conformance.c` が suite を読んで同じ検査をする。suite は bdf の CI の成果物（`bdf-conformance`）とリリースの添付（`bdf-conformance-<tag>.tar.gz`）として配られる。libbdf の CI でこれを回すのは、その添付を持つ bdf の版に `go/go.mod` を上げてからにする。
+libbdf 側は `tests/conformance.c` が suite を読んで同じ検査をする。suite は bdf の CI の成果物（`bdf-conformance`）とリリースの添付（`bdf-conformance-<tag>.tar.gz`）として配られる。libbdf の CI（`conformance` ジョブ）は添付を取りに行かず、`go/go.mod` が固定している版の bdf で同じスイートを書き出して回す。差分テストが突き合わせている参照実装と、適合テストの期待値を出した参照実装が、いつも同じ版になる。
 
 ## 8. 配り方
 
@@ -120,7 +120,7 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 ## 9. 道筋
 
 1. ~~コンテナと manifest（JSON）、Part の取得（single、split、コールバック）、deflate-raw、spec の上限。~~ 済み。
-2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI には `conformance` ジョブがあり、ハーネスが固定している bdf のバージョン（`go/go.mod`）でスイートを書き出して走らせる。0.1.5 まではスイートがないので何もしない。bdf の次のタグに上げれば動く。
+2. ~~機械可読の適合テスト。~~ bdf 側に `conformance` パッケージと `bdf conformance` を足した。libbdf の CI には `conformance` ジョブがあり、ハーネスが固定している bdf のバージョン（`go/go.mod`、いまは 0.1.6）でスイートを書き出して走らせる。スイートを持つのは 0.1.6 からで、それより前の版に固定するとジョブは何もしない。
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
 4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。読み上げ用の構造と正規化つきの検索も済み（§12）。
 5. ~~暗号化。~~ 済み。パスワードと ECDH の開錠、区間（§3.6）の合成。暗号の部品は自前（§11）。
