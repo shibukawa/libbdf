@@ -166,9 +166,10 @@ static int bdfi_r_has_rune(struct bdf_renderer *r, size_t face, uint32_t rune) {
     return bdfi_face_glyph(f->face, rune) != 0;
   }
   if (f->cover_state == 0) {
-    const uint8_t *data;
-    size_t len;
-    int owned;
+    /* (set when there is a table, which gcc at -O1 cannot tell) */
+    const uint8_t *data = NULL;
+    size_t len = 0;
+    int owned = 0;
     int rc = bdfi_fonts_cmap(r->fonts, face, &data, &len, &owned);
     if (rc < 0) {
       r->oom = 1;
