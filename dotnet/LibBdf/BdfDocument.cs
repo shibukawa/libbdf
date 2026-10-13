@@ -162,8 +162,29 @@ public sealed unsafe class BdfFonts : IDisposable
         BdfException.Check(status, error);
     }
 
-    /// <summary>Adds a font file. (Its bytes are read here: a path means the same to .NET on every system.)</summary>
-    public void AddFile(string path) => Add(File.ReadAllBytes(path));
+    /// <summary>
+    /// Adds a font file by its path. libbdf reads the names of its faces now and its glyphs when a renderer
+    /// first draws with one, so the file stays where it is while the set is used, and a large font costs
+    /// no memory until it is drawn with.
+    /// </summary>
+    public void AddFile(string path)
+    {
+        string full = Path.GetFullPath(path);
+        if (!File.Exists(full))
+        {
+            throw new FileNotFoundException("the font file is not there", full);
+        }
+        // UTF-8 with a NUL after it: what libbdf takes a path as on every system
+        byte[] utf8 = new byte[System.Text.Encoding.UTF8.GetByteCount(full) + 1];
+        System.Text.Encoding.UTF8.GetBytes(full, 0, full.Length, utf8, 0);
+        Native.Error error;
+        int status;
+        fixed (byte* p = utf8)
+        {
+            status = Native.bdf_fonts_add_file(Handle, p, &error);
+        }
+        BdfException.Check(status, error);
+    }
 
     public int Count => checked((int)Native.bdf_fonts_count(Handle));
 

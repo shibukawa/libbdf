@@ -10,6 +10,11 @@ on:
         description: "Minutes to fuzz each target with libFuzzer and go test -fuzz (0 skips the fuzz job)"
         default: "0"
 
+# No job writes to the repository, and some run what is fetched from
+# elsewhere (package managers, a prebuilt Skia): the token they get reads.
+permissions:
+  contents: read
+
 jobs:
   # Build and the unit tests on every platform the library is meant for,
   # against the sources and against the single-header form.

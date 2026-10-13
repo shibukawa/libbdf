@@ -32,6 +32,31 @@ static int warned(const bdf_renderer *r, const char *what) {
   return 0;
 }
 
+/*
+ * A file for a font in the directory the test runs in, named with
+ * characters that are not ASCII ("bdf-test-日本語-é.ttf"; the test against
+ * the single header, which may run at the same time, has a name of its
+ * own). The name is UTF-8; Windows is asked for the file by the same name
+ * in UTF-16.
+ */
+#ifdef BDF_TEST_SINGLE
+#define FONT_FILE_STEM "bdf-test-single-"
+#define FONT_FILE_STEM_W L"bdf-test-single-"
+#else
+#define FONT_FILE_STEM "bdf-test-"
+#define FONT_FILE_STEM_W L"bdf-test-"
+#endif
+static const char font_file_name[] = FONT_FILE_STEM "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e-\xc3\xa9.ttf";
+#ifdef _WIN32
+#include <wchar.h>
+static const wchar_t font_file_wide[] = FONT_FILE_STEM_W L"\x65e5\x672c\x8a9e-\x00e9.ttf";
+static FILE *font_file_create(void) { return _wfopen(font_file_wide, L"wb"); }
+static void font_file_remove(void) { _wremove(font_file_wide); }
+#else
+static FILE *font_file_create(void) { return fopen(font_file_name, "wb"); }
+static void font_file_remove(void) { remove(font_file_name); }
+#endif
+
 static bdf_object *box_object(ob *o, float w, float h) {
   o->bbox[2] = w;
   o->bbox[3] = h;
@@ -400,6 +425,34 @@ static void test_text(void) {
   CHECK(pixel(&img, 1, 3) == ink && pixel(&img, 8, 9) == ink && pixel(&img, 9, 5) == paper);
   CHECK(pixel(&img, 11, 3) == ink && pixel(&img, 18, 9) == ink && pixel(&img, 19, 5) == paper);
   CHECK(bdf_renderer_warning_count(r) == 0);
+  /* the same font from a file, by a path that is not ASCII (UTF-8, on
+   * Windows too): the same picture */
+  {
+    FILE *f = font_file_create();
+    CHECK(f != NULL);
+    if (f) {
+      CHECK(fwrite(rv_font_boxes, 1, sizeof rv_font_boxes, f) == sizeof rv_font_boxes);
+      fclose(f);
+      bdf_fonts *filed = NULL;
+      bdf_renderer *r2 = NULL;
+      bdf_image img2 = {0};
+      CHECK(bdf_fonts_new(&filed, &err) == BDF_OK);
+      CHECK(bdf_fonts_add_file(filed, font_file_name, &err) == BDF_OK);
+      CHECK(bdf_fonts_count(filed) == 1);
+      /* bytes that are not UTF-8 are no path of a file here */
+      CHECK(bdf_fonts_add_file(filed, "bdf-test-\xff\xfe.ttf", &err) == BDF_ERR_FORMAT);
+      bdf_render_options opts2 = {0, 0, filed};
+      CHECK(bdf_renderer_new(doc, &opts2, &r2, &err) == BDF_OK);
+      CHECK(bdf_render_page(r2, 0, 2, 1, &img2, &err) == BDF_OK);
+      CHECK(img2.width == img.width && img2.height == img.height);
+      CHECK(img2.pixels && memcmp(img2.pixels, img.pixels, 4 * (size_t)img.width * (size_t)img.height) == 0);
+      CHECK(bdf_renderer_warning_count(r2) == 0);
+      bdf_image_free(&img2);
+      bdf_renderer_free(r2);
+      bdf_fonts_free(filed);
+      font_file_remove();
+    }
+  }
   bdf_image_free(&img);
   /* and a font that cannot be read is drawn in its stead */
   CHECK(bdf_render_page(r, 0, 3, 1, &img, &err) == BDF_OK);
