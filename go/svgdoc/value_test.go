@@ -415,7 +415,7 @@ func TestLabels(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("%d labels and their variants: %d read, %d of encodings that are not read, %d no labels", len(labels), read, refused, unknown)
+	t.Logf("%d labels and their variants: %d of the encodings that are read, %d of the others (read while they are ASCII, refused when not), %d no labels", len(labels), read, refused, unknown)
 }
 
 // bdfModule is the directory of the bdf module the tests are pinned to.
