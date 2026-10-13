@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/shibukawa/bdf/image/imgconv"
 )
 
 // jpegDiskFiles are the files that exist: the image parts of the reference's
@@ -852,6 +854,10 @@ func jpegHandmade() map[string][]byte {
 	// many scans of little data each
 	out["hand/many-scans"] = jpegManyScans(40, 24, 300)
 	out["hand/many-scans-wide"] = jpegManyScans(2048, 8, 40)
+	// as many as are read, one fewer and one more
+	for _, n := range []int{imgconv.MaxJPEGScans - 1, imgconv.MaxJPEGScans, imgconv.MaxJPEGScans + 1} {
+		out[fmt.Sprintf("hand/scans-%d", n)] = jpegManyScans(24, 16, n)
+	}
 	// frame headers Go refuses, or takes in its own way
 	frame := func(name string, payload []byte) {
 		out["hand/sof-"+name] = jpegJoin([]jpegSegment{{marker: 0xc0, payload: payload},

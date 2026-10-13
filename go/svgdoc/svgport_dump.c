@@ -301,8 +301,6 @@ char *svgport_dump(const uint8_t *data, size_t len, int64_t max_depth, int64_t m
       what = "notsvg";
     } else if (err.message == bdfi_svg_msg_encoding()) {
       what = "encoding";
-    } else if (err.message == bdfi_svg_msg_selector()) {
-      what = "panic";
     } else if (err.message == bdfi_svg_msg_entities()) {
       what = "entities";
     } else if (err.message == bdfi_svg_msg_sheets()) {
@@ -311,7 +309,7 @@ char *svgport_dump(const uint8_t *data, size_t len, int64_t max_depth, int64_t m
       what = "input";
     }
     if ((st == BDF_ERR_FORMAT) !=
-            (!strcmp(what, "notsvg") || !strcmp(what, "encoding") || !strcmp(what, "panic")) ||
+            (!strcmp(what, "notsvg") || !strcmp(what, "encoding")) ||
         (st == BDF_ERR_TOO_LARGE) !=
             (!strcmp(what, "entities") || !strcmp(what, "sheets") || !strcmp(what, "input"))) {
       abort();

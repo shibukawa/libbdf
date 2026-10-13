@@ -372,9 +372,8 @@ static const bdfi_svg_block *bdfi_svg_parse_block(bdfi_svg_css *css, bdfi_svg_st
  * parseCSS in css.go: reads the rules of a style sheet: compound selectors
  * of type, id and class, and descendant combinators. At-rules are skipped.
  * src is the sheet without its comments, kept as long as the document.
- * It returns BDF_ERR_FORMAT for a rule whose selector has no parts: the
- * reference takes it and then panics over it (newStyleSheet indexes the
- * last part of every selector).
+ * A selector that is not understood selects nothing, and neither does one
+ * of nothing but combinators.
  */
 static bdf_status bdfi_svg_parse_rules(bdfi_svg_css *css, bdfi_svg_str src) {
   size_t pos = 0, order = 0;
@@ -425,11 +424,8 @@ static bdf_status bdfi_svg_parse_rules(bdfi_svg_css *css, bdfi_svg_str src) {
       if (ok < 0) {
         return BDF_ERR_NOMEM;
       }
-      if (!ok) {
-        continue;
-      }
-      if (rule->nsel == 0) {
-        return BDF_ERR_FORMAT; /* Go panics here: index out of range [-1] */
+      if (!ok || rule->nsel == 0) {
+        continue; /* (no parts: nothing but combinators) */
       }
       if (!block) {
         block = bdfi_svg_parse_block(css, body);
@@ -797,9 +793,6 @@ bdf_status bdfi_svg_apply_css(bdfi_svg_pool *pool, bdfi_svg_str src, bdfi_svg_no
     }
   }
   bdf_status st = bdfi_svg_parse_rules(&css, bdfi_svg_str_of(text, n));
-  if (st == BDF_ERR_FORMAT) {
-    *msg = bdfi_svg_msg_selector();
-  }
   if (st == BDF_OK && css.nrules > 0) {
     if (bdfi_svg_index_rules(&css) != 0) {
       st = BDF_ERR_NOMEM;

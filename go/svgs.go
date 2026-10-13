@@ -130,9 +130,8 @@ func (g *svgGen) transform() string {
 
 // pathData is path data: every command, absolute and relative, repeated
 // without its letter, flags written against what follows, and errors that
-// end the path where they are. One thing is left out: anything but a
-// command after a Z, at which the reference does not stop (it closes the
-// path until it has no memory left).
+// end the path where they are, among them numbers after a Z, which takes
+// none.
 func (g *svgGen) pathData() string {
 	var b strings.Builder
 	sep := func() string { return g.pick(" ", ",", " , ", "", "\n") }
@@ -144,8 +143,12 @@ func (g *svgGen) pathData() string {
 	closed := false
 	for range 1 + g.r.IntN(8) {
 		if closed {
-			// a letter must follow a Z
-			fmt.Fprintf(&b, "%s%s %s", g.pick("M", "m", "L", "l"), n(), n())
+			if g.r.IntN(6) == 0 {
+				// numbers where a letter must follow: the path ends here
+				fmt.Fprintf(&b, "%s%s%s ", g.pick("", " ", ","), n(), g.pick("", " "+n()))
+			} else {
+				fmt.Fprintf(&b, "%s%s %s", g.pick("M", "m", "L", "l"), n(), n())
+			}
 			closed = false
 		}
 		switch g.r.IntN(14) {
@@ -177,7 +180,7 @@ func (g *svgGen) pathData() string {
 			if g.r.IntN(2) == 0 {
 				return b.String()
 			}
-			// the letter of what follows, so that nothing follows a Z bare
+			// (what follows is not read)
 			fmt.Fprintf(&b, " M%s %s", n(), n())
 		default:
 			fmt.Fprintf(&b, " l %s %s", n(), n())

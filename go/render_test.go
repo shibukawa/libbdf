@@ -197,6 +197,14 @@ func TestRenderImagesMatchReference(t *testing.T) {
 	compareDocuments(t, nil, nil, func(r *rand.Rand) *bdf.Document { return RandomImageDocument(r) })
 }
 
+// dumpDocument writes a document the renderers disagree on to the file
+// LIBBDF_RENDER_DUMP names (with .bdf after it), when it names one.
+func dumpDocument(file []byte) {
+	if name := os.Getenv("LIBBDF_RENDER_DUMP"); name != "" {
+		os.WriteFile(name+".bdf", file, 0o644)
+	}
+}
+
 // compareDocuments draws the pages, strips and sheets of random documents
 // with libbdf and with the reference.
 func compareDocuments(t *testing.T, fontDirs []string, fonts *Fonts, random func(r *rand.Rand) *bdf.Document) {
@@ -245,7 +253,7 @@ func compareDocuments(t *testing.T, fontDirs []string, fonts *Fonts, random func
 					apart++
 					return
 				}
-				os.WriteFile(os.Getenv("LIBBDF_RENDER_DUMP")+".bdf", buf.Bytes(), 0o644)
+				dumpDocument(buf.Bytes())
 				t.Fatalf("document %d %s: %s", i, what, d)
 			}
 			images++
@@ -293,7 +301,7 @@ func compareDocuments(t *testing.T, fontDirs []string, fonts *Fonts, random func
 		}
 		// what the two could not draw is the same, in the order they met it
 		if want, got := ref.Warnings(), cr.Warnings(); !slices.Equal(want, got) {
-			os.WriteFile(os.Getenv("LIBBDF_RENDER_DUMP")+".bdf", buf.Bytes(), 0o644)
+			dumpDocument(buf.Bytes())
 			t.Fatalf("document %d: the reference warns\n  %s\nlibbdf\n  %s", i, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
 		}
 		for _, w := range cr.Warnings() {

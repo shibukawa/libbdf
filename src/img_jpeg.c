@@ -1724,10 +1724,76 @@ BDF_INTERNAL int bdfi_jpeg_config(const uint8_t *data, size_t len, int32_t *w, i
   return 1;
 }
 
+/*
+ * jpegScansEnd of imgconv. It passes over the image as the decoder does
+ * between its segments (bdfi_jpeg_read_segments): a marker is 0xff, any
+ * number of them, and a byte that is neither zero (a 0xff of the data of a
+ * scan is followed by one) nor a restart marker; what is not a marker is
+ * passed over, which is how the data of a scan is. A segment is as long as
+ * it says. Where the decoder would give up, this may read on: it only has
+ * to find every scan the decoder does.
+ */
+BDF_INTERNAL size_t bdfi_jpeg_scans_end(const uint8_t *data, size_t len, size_t max) {
+  if (len < 3 || data[0] != 0xff || data[1] != 0xd8 || data[2] != 0xff) {
+    return SIZE_MAX; /* Sniff says it is no JPEG image */
+  }
+  size_t scans = 0;
+  for (size_t i = 2;;) {
+    while (i < len && data[i] != 0xff) {
+      i++;
+    }
+    size_t at = i;
+    while (i < len && data[i] == 0xff) {
+      i++;
+    }
+    if (i >= len) {
+      return SIZE_MAX;
+    }
+    uint8_t marker = data[i++];
+    if (marker == 0x00 || (marker >= BDFI_JPEG_RST0 && marker <= BDFI_JPEG_RST7)) {
+      continue; /* a 0xff of the data of a scan, or a restart marker */
+    }
+    if (marker == BDFI_JPEG_EOI) {
+      return SIZE_MAX;
+    }
+    if (len - i < 2) {
+      return SIZE_MAX;
+    }
+    size_t n = (size_t)data[i] << 8 | data[i + 1];
+    if (n < 2) {
+      return SIZE_MAX; /* no segment: the decoder gives up here */
+    }
+    if (marker == BDFI_JPEG_SOS) {
+      if (scans == max) {
+        return at;
+      }
+      scans++;
+    }
+    /* (past the end for a segment that is cut short: no marker after it) */
+    i = n > len - i ? len : i + n;
+  }
+}
+
 /* imgconv.Decode of the reference with jpeg.Decode, and the conversion of
  * the image. */
 BDF_INTERNAL bdf_status bdfi_jpeg_decode(const uint8_t *data, size_t len, bdfi_bitmap *out) {
   memset(out, 0, sizeof *out);
+
+  /* LimitJPEGScans: an image is read as far as its first scans, which are
+   * the file up to the scan after them and the end of an image */
+  uint8_t *cut = NULL;
+  size_t end = bdfi_jpeg_scans_end(data, len, BDFI_MAX_JPEG_SCANS);
+  if (end != SIZE_MAX) {
+    cut = bdfi_malloc_array(end + 2, 1);
+    if (!cut) {
+      return BDF_ERR_NOMEM;
+    }
+    memcpy(cut, data, end);
+    cut[end] = 0xff;
+    cut[end + 1] = BDFI_JPEG_EOI;
+    data = cut;
+    len = end + 2;
+  }
 
   /* The size check is on what DecodeConfig reads, whatever Decode would
    * make of the file. (Where DecodeConfig fails, Decode fails before it
@@ -1735,6 +1801,7 @@ BDF_INTERNAL bdf_status bdfi_jpeg_decode(const uint8_t *data, size_t len, bdfi_b
   int32_t w = 0, h = 0;
   if (bdfi_jpeg_config(data, len, &w, &h)) {
     if (w <= 0 || h <= 0 || (int64_t)w > BDFI_MAX_DECODE_PIXELS / (int64_t)h) {
+      free(cut);
       return BDF_ERR_TOO_LARGE;
     }
   }
@@ -1745,6 +1812,7 @@ BDF_INTERNAL bdf_status bdfi_jpeg_decode(const uint8_t *data, size_t len, bdfi_b
   d.len = len;
   d.t = bdfi_calloc_array(1, sizeof *d.t);
   if (!d.t) {
+    free(cut);
     return BDF_ERR_NOMEM;
   }
   bdf_status st = bdfi_jpeg_read_segments(&d, 0);
@@ -1756,5 +1824,6 @@ BDF_INTERNAL bdf_status bdfi_jpeg_decode(const uint8_t *data, size_t len, bdfi_b
     free(d.prog_coeffs[i]);
   }
   free(d.t);
+  free(cut);
   return st;
 }

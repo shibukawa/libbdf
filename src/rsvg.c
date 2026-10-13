@@ -2285,7 +2285,8 @@ static void bdfi_svg_raster_size(const bdfi_svg_image *si, double k, int *step, 
 /* rasterIn: a raster of the image drawn with k device pixels per image
  * pixel (rounded up to a power of the square root of two, and bounded), for
  * an image that is inside as many SVG images as inside says. NULL when the
- * renderer has no room for it; *scale is the scale of the raster. */
+ * renderer has no room for it; *scale is the scale of the raster, that of
+ * its width, whole pixels, to the image's. */
 static bdfi_picture *bdfi_svg_raster_in(struct bdf_renderer *r, bdfi_svg_image *si, double k,
                                         int inside, double *scale) {
   int step, w, h;
@@ -2297,6 +2298,8 @@ static bdfi_picture *bdfi_svg_raster_in(struct bdf_renderer *r, bdfi_svg_image *
   bdfi_picture **slot = &si->rasters[step + 64];
   if (*slot) {
     (*slot)->used = r->drawing;
+    /* the scale it was given when it was made, below */
+    *scale = (double)(*slot)->w / si->w;
     return *slot;
   }
   if (!bdfi_r_make_room(r, (int64_t)w * h)) {

@@ -16,7 +16,6 @@
 
 static const char bdfi_svg_not_svg[] = "svg: no svg root element";
 static const char bdfi_svg_bad_encoding[] = "svg: the document is in an encoding that is not read";
-static const char bdfi_svg_bad_selector[] = "svg: a style rule without a selector";
 static const char bdfi_svg_big_entities[] =
     "svg: the entities of the document stand for more than a megabyte";
 static const char bdfi_svg_big_sheets[] =
@@ -28,9 +27,6 @@ const char *bdfi_svg_msg_not_svg(void) {
 }
 const char *bdfi_svg_msg_encoding(void) {
   return bdfi_svg_bad_encoding;
-}
-const char *bdfi_svg_msg_selector(void) {
-  return bdfi_svg_bad_selector;
 }
 const char *bdfi_svg_msg_entities(void) {
   return bdfi_svg_big_entities;
