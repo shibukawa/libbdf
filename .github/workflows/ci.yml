@@ -268,8 +268,14 @@ jobs:
         id: suite
         working-directory: go
         run: |
+          # (go list says where a module is only once it is in the module cache)
+          go mod download github.com/shibukawa/bdf
           dir=$(go list -m -f '{{.Dir}}' github.com/shibukawa/bdf)
           version=$(go list -m -f '{{.Version}}' github.com/shibukawa/bdf)
+          if [ -z "$dir" ] || [ ! -d "$dir/testdata" ]; then
+            echo "::error::bdf $version is not in the module cache: '$dir'"
+            exit 1
+          fi
           if [ ! -d "$dir/conformance" ]; then
             echo "::notice::bdf $version has no conformance suite: nothing is run"
             exit 0
@@ -281,7 +287,7 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_CONFORMANCE_DIR="${{ steps.suite.outputs.dir }}"
           cmake --build build --target test_conformance
-          ctest --test-dir build -R '^conformance$' --output-on-failure
+          ctest --test-dir build -R '^conformance$' --output-on-failure --no-tests=error
 
   # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
   fuzz:
