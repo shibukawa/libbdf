@@ -253,9 +253,9 @@ jobs:
 
   # The conformance suite of bdf (its package conformance, `bdf conformance`):
   # written by the version of bdf the harness is pinned to (go/go.mod), from
-  # that version's test documents, and run by test_conformance. The versions
-  # of bdf up to 0.1.5 have no suite: the job then says so and runs nothing.
-  # Raising the version in go/go.mod is what turns it on.
+  # that version's test documents, and run by test_conformance. bdf has the
+  # suite from 0.1.6 on; pinned to a version before it, the job says so and
+  # runs nothing.
   conformance:
     runs-on: ubuntu-latest
     steps:
@@ -268,8 +268,14 @@ jobs:
         id: suite
         working-directory: go
         run: |
+          # (go list says where a module is only once it is in the module cache)
+          go mod download github.com/shibukawa/bdf
           dir=$(go list -m -f '{{.Dir}}' github.com/shibukawa/bdf)
           version=$(go list -m -f '{{.Version}}' github.com/shibukawa/bdf)
+          if [ -z "$dir" ] || [ ! -d "$dir/testdata" ]; then
+            echo "::error::bdf $version is not in the module cache: '$dir'"
+            exit 1
+          fi
           if [ ! -d "$dir/conformance" ]; then
             echo "::notice::bdf $version has no conformance suite: nothing is run"
             exit 0
@@ -281,7 +287,7 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_CONFORMANCE_DIR="${{ steps.suite.outputs.dir }}"
           cmake --build build --target test_conformance
-          ctest --test-dir build -R '^conformance$' --output-on-failure
+          ctest --test-dir build -R '^conformance$' --output-on-failure --no-tests=error
 
   # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
   fuzz:
