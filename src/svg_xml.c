@@ -1,8 +1,8 @@
 /*
  * The XML reader of the SVG reader: a port of xmltree.Open of the reference
  * implementation (internal/xmltree/open.go) and of the pull reader it opens,
- * xmlro.Reader of github.com/shibukawa/tinygodriver (encoding/xmlro; Apache
- * License 2.0, see third_party/tinygodriver/LICENSE), as
+ * xmlro.Reader of github.com/shibukawa/tinygodriver (encoding/xmlro, by the
+ * author of libbdf, who gives this port under libbdf's license), as
  * svg.Parse configures it: lenient (an end tag that does not match ends the
  * elements it leaves open, attributes without values or quotes), with the
  * entities and the void elements of HTML, a DOCTYPE read for the entities
