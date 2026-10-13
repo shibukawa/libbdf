@@ -1,5 +1,5 @@
-set(BDF_TESTS object header inflate manifest doc font text)
-set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text)
+set(BDF_TESTS object header inflate manifest doc font text unlock)
+set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock)
 
 if(MSVC)
   set(BDF_TEST_WARNINGS /W4)
@@ -26,11 +26,12 @@ foreach(target ${BDF_FUZZ_TARGETS})
 endforeach()
 
 # Tests built from the sources, which reach the internals: the WOFF2
-# transforms on their own, and the conformance runner, which reads suite.json
-# with the library's own JSON reader.
+# transforms on their own, the primitives behind encrypted documents, and the
+# conformance runner, which reads suite.json with the library's own JSON
+# reader.
 set(BDF_ABS_SOURCES ${BDF_SOURCES} ${BDF_GLUE})
 list(TRANSFORM BDF_ABS_SOURCES PREPEND ${PROJECT_SOURCE_DIR}/)
-foreach(name woff2_internal text_internal conformance)
+foreach(name woff2_internal text_internal crypto_internal conformance)
   add_executable(test_${name} ${name}.c ${BDF_ABS_SOURCES} ${BDF_BROTLI_OBJECTS})
   target_include_directories(test_${name} PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
   if(BDF_BROTLI_INCLUDE)
@@ -41,6 +42,7 @@ foreach(name woff2_internal text_internal conformance)
 endforeach()
 add_test(NAME woff2-internal COMMAND test_woff2_internal)
 add_test(NAME text-internal COMMAND test_text_internal)
+add_test(NAME crypto-internal COMMAND test_crypto_internal)
 if(BDF_CONFORMANCE_DIR)
   add_test(NAME conformance COMMAND test_conformance ${BDF_CONFORMANCE_DIR})
 endif()

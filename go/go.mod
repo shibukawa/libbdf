@@ -5,9 +5,7 @@ go 1.27
 require (
 	github.com/klauspost/compress v1.20.1
 	github.com/shibukawa/bdf v0.1.5
+	golang.org/x/text v0.42.0
 )
 
-require (
-	github.com/andybalholm/brotli v1.2.5 // indirect
-	golang.org/x/text v0.42.0 // indirect
-)
+require github.com/andybalholm/brotli v1.2.5 // indirect

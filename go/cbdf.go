@@ -373,6 +373,8 @@ func DecodePaths(data []byte) ([]Path, error) {
 type Doc struct {
 	p     *C.bdf_doc
 	cdata unsafe.Pointer
+	// the bytes of the segments that were added, which the document reads from
+	extra []unsafe.Pointer
 }
 
 // OpenMemory opens the single-file form from bytes (copied into C memory, as
@@ -396,9 +398,56 @@ func (d *Doc) Close() {
 	if d.p != nil {
 		C.bdf_doc_free(d.p)
 		C.free(d.cdata)
+		for _, p := range d.extra {
+			C.free(p)
+		}
 		d.p = nil
 	}
 }
+
+// Unlock opens an encrypted document with its password.
+func (d *Doc) Unlock(password string) error {
+	b := []byte(password)
+	var e C.bdf_error
+	if C.bdf_doc_unlock(d.p, (*C.char)(unsafe.Pointer(ptr(b))), C.size_t(len(b)), &e) != C.BDF_OK {
+		return errorOf(&e)
+	}
+	return nil
+}
+
+// UnlockECDH opens a document sealed for the private key (a P-256 scalar).
+func (d *Doc) UnlockECDH(private [32]byte) error {
+	var e C.bdf_error
+	if C.bdf_doc_unlock_ecdh(d.p, (*C.uint8_t)(&private[0]), &e) != C.BDF_OK {
+		return errorOf(&e)
+	}
+	return nil
+}
+
+// AddSegment puts the pages of a segment document into d, which owns it
+// from then on: seg must not be used or closed after a success.
+func (d *Doc) AddSegment(seg *Doc) error {
+	var e C.bdf_error
+	if C.bdf_doc_add_segment(d.p, seg.p, &e) != C.BDF_OK {
+		return errorOf(&e)
+	}
+	d.extra = append(d.extra, seg.cdata)
+	d.extra = append(d.extra, seg.extra...)
+	seg.p, seg.cdata, seg.extra = nil, nil, nil
+	return nil
+}
+
+// PublicKey is bdf_p256_public_key.
+func PublicKey(private [32]byte) (out [65]byte, ok bool) {
+	return out, C.bdf_p256_public_key((*C.uint8_t)(&private[0]), (*C.uint8_t)(&out[0])) == C.BDF_OK
+}
+
+// Error statuses.
+const (
+	ErrFormat   = int(C.BDF_ERR_FORMAT)
+	ErrArg      = int(C.BDF_ERR_ARG)
+	ErrPassword = int(C.BDF_ERR_PASSWORD)
+)
 
 func (d *Doc) Encrypted() bool { return C.bdf_doc_encrypted(d.p) != 0 }
 func (d *Doc) Locked() bool    { return C.bdf_doc_locked(d.p) != 0 }

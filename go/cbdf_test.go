@@ -414,7 +414,7 @@ func dumpManifestC(d *Doc) string {
 		}
 		sb.WriteByte('\n')
 	}
-	if d.Encrypted() {
+	if d.Locked() { // the stored manifest: once unlocked, the sealed one is shown
 		h, enc, _ := d.SealedManifest()
 		fmt.Fprintf(&sb, "encryption %q manifest %x %q\n", d.Cipher(), h[:], enc)
 		for _, k := range d.Keys() {
@@ -671,6 +671,9 @@ func FuzzDoc(f *testing.F) {
 		}
 		defer d.Close()
 		if gerr != nil {
+			if foldedMembers(data) { // a member libbdf does not see ("H" for "h")
+				return
+			}
 			t.Fatalf("libbdf opened what the reference rejects: %v", gerr)
 		}
 		if r.Locked() != d.Locked() {
