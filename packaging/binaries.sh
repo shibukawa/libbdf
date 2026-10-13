@@ -38,7 +38,7 @@ cmake --install "$out/shared" --config Release --prefix "$stage/shared"
 
 mkdir -p "$stage/licenses"
 cp "$root/LICENSE" "$stage/licenses/LICENSE"
-for notice in brotli go-math go-image unicode; do
+for notice in brotli go-math go-image go-text tinygodriver unicode; do
   cp "$root/third_party/$notice/LICENSE" "$stage/licenses/LICENSE.$notice"
 done
 

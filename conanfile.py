@@ -63,7 +63,7 @@ class BdfConan(ConanFile):
 
     def package(self):
         copy(self, "LICENSE", self.source_folder, os.path.join(self.package_folder, "licenses"))
-        for notice in ("brotli", "go-math", "go-image", "unicode"):
+        for notice in ("brotli", "go-math", "go-image", "go-text", "tinygodriver", "unicode"):
             copy(self, "LICENSE", os.path.join(self.source_folder, "third_party", notice),
                  os.path.join(self.package_folder, "licenses", notice))
         cmake = CMake(self)
