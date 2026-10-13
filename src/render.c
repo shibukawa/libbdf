@@ -93,6 +93,10 @@ void bdf_renderer_free(bdf_renderer *r) {
   }
   free(r->parts);
   bdfi_robj_clear(&r->alone);
+  for (size_t i = 0; i < r->nkept; i++) {
+    bdfi_picture_free(r->kept[i]);
+  }
+  free(r->kept);
   for (size_t i = 0; i < r->nwarnings; i++) {
     free(r->warnings[i]);
   }
@@ -112,6 +116,7 @@ static bdf_renderer *bdfi_renderer_alloc(const bdf_doc *doc, const bdf_render_op
     r->background = opts->background;
   }
   r->sc.r = r;
+  r->room = BDF_MAX_PICTURE_PIXELS;
   return r;
 }
 
@@ -184,6 +189,133 @@ bdfi_robj *bdfi_r_object(struct bdf_renderer *r, const uint8_t hash[16]) {
     }
   }
   return o->state == 1 ? o : NULL;
+}
+
+/* ---- Pictures ------------------------------------------------------------ */
+
+/*
+ * makeRoom: room for a picture of n pixels among those kept. Pictures that
+ * the image being drawn has not used are let go, the ones used longest ago
+ * first (nothing drawn before refers to them still). It reports whether
+ * there is room.
+ */
+static int bdfi_r_make_room(struct bdf_renderer *r, int64_t n) {
+  if (n > r->room) {
+    return 0;
+  }
+  while (r->pixels + n > r->room) {
+    size_t oldest = r->nkept;
+    for (size_t i = 0; i < r->nkept; i++) {
+      if (r->kept[i]->used < r->drawing &&
+          (oldest == r->nkept || r->kept[i]->used < r->kept[oldest]->used)) {
+        oldest = i;
+      }
+    }
+    if (oldest == r->nkept) {
+      return 0;
+    }
+    bdfi_picture *p = r->kept[oldest];
+    r->parts[p->part].pic = NULL;
+    r->parts[p->part].pic_state = 0;
+    r->pixels -= (int64_t)p->w * p->h;
+    memmove(r->kept + oldest, r->kept + oldest + 1, (r->nkept - oldest - 1) * sizeof *r->kept);
+    r->nkept--;
+    bdfi_picture_free(p);
+  }
+  return 1;
+}
+
+bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
+  char name[33];
+  bdfi_robj *o = bdfi_r_part(r, hash);
+  if (!o) {
+    if (!r->oom) {
+      bdfi_hex(hash, name);
+      bdfi_r_warnf(r, "image %s is missing", name);
+    }
+    return NULL;
+  }
+  if (o->pic_state != 0) {
+    if (o->pic) {
+      o->pic->used = r->drawing;
+    }
+    return o->pic;
+  }
+  o->pic_state = 2;
+  size_t part = (size_t)(o - r->parts);
+  uint8_t *data = NULL;
+  size_t len = 0;
+  bdf_error e;
+  bdf_status st = bdf_doc_part(r->doc, hash, &data, &len, &e);
+  if (st != BDF_OK) {
+    if (st == BDF_ERR_NOMEM) {
+      r->oom = 1;
+      o->pic_state = 0;
+    } else {
+      bdfi_hex(hash, name);
+      bdfi_r_warnf(r, "image %s: %s", name, e.message);
+    }
+    return NULL;
+  }
+  if (bdfi_image_is_svg(data, len)) {
+    bdf_free(data);
+    bdfi_r_warn(r, "SVG images are not drawn");
+    return NULL;
+  }
+  /* an image whose size can be read makes room for itself before it is
+   * decoded; one there is no room for while this image is drawn may find
+   * some in the next */
+  int32_t w, h;
+  if (bdfi_image_config(data, len, &w, &h) && w > 0 && h > 0 &&
+      (int64_t)w * h <= BDFI_MAX_DECODE_PIXELS && !bdfi_r_make_room(r, (int64_t)w * h)) {
+    bdf_free(data);
+    bdfi_r_warnf(r,
+                 "the images of a page have more than %lld pixels in all: the rest of them is not "
+                 "drawn",
+                 (long long)r->room);
+    o->pic_state = 0;
+    return NULL;
+  }
+  bdfi_picture *p = NULL;
+  int format = BDFI_IMAGE_NONE;
+  st = bdfi_picture_decode(data, len, &p, &format);
+  bdf_free(data);
+  if (st == BDF_OK && r->nkept == r->cap_kept) {
+    size_t cap = r->cap_kept ? 2 * r->cap_kept : 8;
+    bdfi_picture **kept = bdfi_realloc_array(r->kept, cap, sizeof *kept);
+    if (kept) {
+      r->kept = kept;
+      r->cap_kept = cap;
+    } else {
+      bdfi_picture_free(p);
+      st = BDF_ERR_NOMEM;
+    }
+  }
+  if (st == BDF_ERR_NOMEM) {
+    r->oom = 1;
+    o->pic_state = 0;
+    return NULL;
+  }
+  if (st == BDF_ERR_TOO_LARGE) {
+    bdfi_r_warnf(r, "an image of more than %lld pixels is not drawn",
+                 (long long)BDFI_MAX_DECODE_PIXELS);
+    return NULL;
+  }
+  if (st != BDF_OK) {
+    if (format == BDFI_IMAGE_AVIF) {
+      bdfi_r_warn(r, "AVIF images are not drawn");
+    } else {
+      bdfi_r_warnf(r, "an image (%s) cannot be decoded", bdfi_image_name(format));
+    }
+    return NULL;
+  }
+  p->used = r->drawing;
+  p->part = part;
+  r->kept[r->nkept++] = p;
+  r->pixels += (int64_t)p->w * p->h;
+  o->pic = p;
+  o->pic_state = 1;
+  return p;
 }
 
 /* The paths of a path collection part, or NULL. */

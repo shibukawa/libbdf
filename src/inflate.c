@@ -21,6 +21,7 @@ typedef struct bdfi_inf {
   size_t in_len, in_pos;
   uint32_t bitbuf;
   int bitcnt;
+  bdfi_pull *pull; /* where more input comes from, for a stream in stretches */
   uint8_t *out;
   size_t out_len, out_cap, limit;
   const char *err; /* the first failure */
@@ -38,11 +39,30 @@ static int bdfi_inf_fail(bdfi_inf *s, const char *msg) {
   return -1;
 }
 
-/* bdfi_inf_bits returns the next need bits (need <= 16), or -1 at the end. */
+/* bdfi_inf_more asks a stream in stretches for its next one, of at most
+ * want bytes, once the one at hand is used up. It returns 0 at the end. */
+static int bdfi_inf_more(bdfi_inf *s, size_t want) {
+  bdfi_pull *in = s->pull;
+  if (!in) {
+    return 0;
+  }
+  in->pos = s->in_pos;
+  if (!in->more(in, want)) {
+    return 0;
+  }
+  s->in = in->p;
+  s->in_len = in->n;
+  s->in_pos = in->pos;
+  return s->in_pos < s->in_len;
+}
+
+/* bdfi_inf_bits returns the next need bits (need <= 16), or -1 at the end.
+ * It takes no byte before a bit of it is needed: what follows the stream
+ * stays unread. */
 static int bdfi_inf_bits(bdfi_inf *s, int need) {
   uint32_t val = s->bitbuf;
   while (s->bitcnt < need) {
-    if (s->in_pos == s->in_len) {
+    if (s->in_pos == s->in_len && !bdfi_inf_more(s, BDFI_PULL_BUFFER)) {
       bdfi_inf_fail(s, "unexpected end of deflate stream");
       return -1;
     }
@@ -197,9 +217,60 @@ static int bdfi_inf_codes(bdfi_inf *s, const bdfi_huff *lencode, const bdfi_huff
   }
 }
 
+/*
+ * bdfi_inf_stored_pulled reads a stored block of a stream in stretches, and
+ * asks for the stretches as the reference's decoder (compress/flate behind
+ * a bufio.Reader) asks its reader: the four bytes of the lengths through
+ * the buffer, and the bytes in runs that end where its window of 32768
+ * bytes ends, a run of a buffer or more with nothing buffered being read
+ * past the buffer. How much of the input has been taken when the stream
+ * ends is what a reader of PNG decides by.
+ */
+static int bdfi_inf_stored_pulled(bdfi_inf *s) {
+  uint8_t head[4];
+  for (int i = 0; i < 4; i++) {
+    if (s->in_pos == s->in_len && !bdfi_inf_more(s, BDFI_PULL_BUFFER)) {
+      return bdfi_inf_fail(s, "unexpected end of deflate stream");
+    }
+    head[i] = s->in[s->in_pos++];
+  }
+  unsigned len = head[0] | ((unsigned)head[1] << 8);
+  unsigned nlen = head[2] | ((unsigned)head[3] << 8);
+  if (len != (~nlen & 0xffffu)) {
+    return bdfi_inf_fail(s, "corrupt deflate stream");
+  }
+  while (len > 0) {
+    size_t run = 32768 - (s->out_len & 32767); /* copyData: to the end of the window */
+    if (run > len) {
+      run = len;
+    }
+    len -= (unsigned)run;
+    while (run > 0) {
+      if (s->in_pos == s->in_len &&
+          !bdfi_inf_more(s, run >= BDFI_PULL_BUFFER ? run : BDFI_PULL_BUFFER)) {
+        return bdfi_inf_fail(s, "unexpected end of deflate stream");
+      }
+      size_t take = s->in_len - s->in_pos;
+      if (take > run) {
+        take = run;
+      }
+      for (size_t i = 0; i < take; i++) {
+        if (bdfi_inf_put(s, s->in[s->in_pos++]) < 0) {
+          return -1;
+        }
+      }
+      run -= take;
+    }
+  }
+  return 0;
+}
+
 static int bdfi_inf_stored(bdfi_inf *s) {
   s->bitbuf = 0;
   s->bitcnt = 0;
+  if (s->pull) {
+    return bdfi_inf_stored_pulled(s);
+  }
   if (s->in_len - s->in_pos < 4) {
     return bdfi_inf_fail(s, "unexpected end of deflate stream");
   }
@@ -329,6 +400,64 @@ static int bdfi_inf_dynamic(bdfi_inf *s) {
   return bdfi_inf_codes(s, &lencode, &distcode);
 }
 
+/* bdfi_inf_blocks inflates the blocks of a stream, to the last one. */
+static void bdfi_inf_blocks(bdfi_inf *s) {
+  int last, type;
+  do {
+    last = bdfi_inf_bits(s, 1);
+    type = bdfi_inf_bits(s, 2);
+    if (last < 0 || type < 0) {
+      break;
+    }
+    int rc;
+    switch (type) {
+    case 0:
+      rc = bdfi_inf_stored(s);
+      break;
+    case 1:
+      rc = bdfi_inf_fixed(s);
+      break;
+    case 2:
+      rc = bdfi_inf_dynamic(s);
+      break;
+    default:
+      rc = bdfi_inf_fail(s, "corrupt deflate stream");
+      break;
+    }
+    if (rc < 0) {
+      break;
+    }
+  } while (!last);
+}
+
+BDF_INTERNAL bdf_status bdfi_inflate_pull(bdfi_pull *in, size_t limit, uint8_t **out,
+                                          size_t *out_len) {
+  *out = NULL;
+  *out_len = 0;
+  bdfi_inf s;
+  memset(&s, 0, sizeof s);
+  s.pull = in;
+  s.in = in->p;
+  s.in_len = in->n;
+  s.in_pos = in->pos;
+  s.limit = limit;
+  bdfi_inf_blocks(&s);
+  in->pos = s.in_pos; /* in is the stretch the stream ended in */
+  if (s.err) {
+    free(s.out);
+    return strcmp(s.err, "out of memory") == 0 ? BDF_ERR_NOMEM : BDF_ERR_FORMAT;
+  }
+  if (!s.out) {
+    s.out = malloc(1);
+    if (!s.out) {
+      return BDF_ERR_NOMEM;
+    }
+  }
+  *out = s.out;
+  *out_len = s.out_len;
+  return BDF_OK;
+}
+
 bdf_status bdf_inflate(const uint8_t *data, size_t len, size_t limit, uint8_t **out,
                        size_t *out_len, bdf_error *err) {
   bdfi_error_clear(err);
@@ -343,32 +472,7 @@ bdf_status bdf_inflate(const uint8_t *data, size_t len, size_t limit, uint8_t **
   s.in = data;
   s.in_len = len;
   s.limit = limit;
-  int last, type;
-  do {
-    last = bdfi_inf_bits(&s, 1);
-    type = bdfi_inf_bits(&s, 2);
-    if (last < 0 || type < 0) {
-      break;
-    }
-    int rc;
-    switch (type) {
-    case 0:
-      rc = bdfi_inf_stored(&s);
-      break;
-    case 1:
-      rc = bdfi_inf_fixed(&s);
-      break;
-    case 2:
-      rc = bdfi_inf_dynamic(&s);
-      break;
-    default:
-      rc = bdfi_inf_fail(&s, "corrupt deflate stream");
-      break;
-    }
-    if (rc < 0) {
-      break;
-    }
-  } while (!last);
+  bdfi_inf_blocks(&s);
   if (s.err) {
     free(s.out);
     bdf_status st = strcmp(s.err, "out of memory") == 0 ? BDF_ERR_NOMEM : BDF_ERR_FORMAT;

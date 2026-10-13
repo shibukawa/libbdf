@@ -56,6 +56,8 @@ func renderSeed(t *testing.T) (cases int, r *rand.Rand) {
 	cases, seed := 300, uint64(7)
 	if n, err := strconv.Atoi(os.Getenv("LIBBDF_RENDER_CASES")); err == nil && n > 0 {
 		cases = n
+	} else if testing.Short() {
+		cases /= 4 // (under AddressSanitizer in the CI)
 	}
 	if n, err := strconv.ParseUint(os.Getenv("LIBBDF_RENDER_SEED"), 10, 64); err == nil {
 		seed = n
@@ -112,11 +114,24 @@ func TestRenderObjectsMatchReference(t *testing.T) {
 // TestRenderDocumentsMatchReference draws the pages, strips and sheets of
 // random documents with libbdf and with the reference.
 func TestRenderDocumentsMatchReference(t *testing.T) {
+	compareDocuments(t, RandomDocument)
+}
+
+// TestRenderImagesMatchReference does the same with documents that draw
+// images: whole and in parts, as patterns, smoothed and not, some turned
+// by their EXIF orientation, and some that cannot be decoded.
+func TestRenderImagesMatchReference(t *testing.T) {
+	compareDocuments(t, func(r *rand.Rand) *bdf.Document { return RandomImageDocument(r) })
+}
+
+// compareDocuments draws the pages, strips and sheets of random documents
+// with libbdf and with the reference.
+func compareDocuments(t *testing.T, random func(r *rand.Rand) *bdf.Document) {
 	cases, r := renderSeed(t)
 	cases = max(cases/6, 10)
 	images, pixels, apart := 0, 0, 0
 	for i := range cases {
-		doc := RandomDocument(r)
+		doc := random(r)
 		var buf bytes.Buffer
 		if err := doc.WriteSingle(&buf); err != nil {
 			t.Fatal(err)
@@ -211,9 +226,19 @@ func TestRenderDocumentsMatchReference(t *testing.T) {
 	t.Logf("%d documents, %d images, %d pixels match (%s)", cases, images, pixels, map[bool]string{true: "to the byte", false: fmt.Sprintf("closely; %d came out apart", apart)}[exactFloats])
 }
 
-// drawsOnlyShapes reports whether an object and the objects it draws draw
-// nothing the rasterizer leaves out yet: no text, no images, no patterns.
-func drawsOnlyShapes(doc *bdf.Document, h bdf.Hash, seen map[bdf.Hash]bool) bool {
+// isSVG is isSVG of the reference: SVG markup rather than an encoded bitmap.
+func isSVG(b []byte) bool {
+	if len(b) >= 2 && (b[0] == 0xff && b[1] == 0xfe || b[0] == 0xfe && b[1] == 0xff) {
+		return true
+	}
+	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
+	b = bytes.TrimLeft(b, " \t\r\n")
+	return len(b) > 0 && b[0] == '<'
+}
+
+// drawsWhatIsDrawn reports whether an object and the objects it draws draw
+// nothing the rasterizer leaves out yet: no text and no SVG images.
+func drawsWhatIsDrawn(doc *bdf.Document, h bdf.Hash, seen map[bdf.Hash]bool) bool {
 	if ok, done := seen[h]; done {
 		return ok
 	}
@@ -227,25 +252,27 @@ func drawsOnlyShapes(doc *bdf.Document, h bdf.Hash, seen map[bdf.Hash]bool) bool
 		return true
 	}
 	ok := true
-	for _, p := range o.Paints {
-		ok = ok && p.Kind != bdf.PaintPattern
+	for _, ih := range o.Images {
+		if p := doc.Part(ih); p != nil {
+			ok = ok && !isSVG(p.Data)
+		}
 	}
 	o.Walk(func(in bdf.Instr) {
 		switch in.Op {
-		case bdf.OpFillText, bdf.OpStrokeText, bdf.OpImage, bdf.OpImageSub:
+		case bdf.OpFillText, bdf.OpStrokeText:
 			ok = false
 		}
 	})
 	for _, c := range o.Objects {
-		ok = ok && drawsOnlyShapes(doc, c, seen)
+		ok = ok && drawsWhatIsDrawn(doc, c, seen)
 	}
 	seen[h] = ok
 	return ok
 }
 
 // TestRenderTestdataMatchesReference draws the pages of the test documents
-// that are made of shapes alone (those of PDFs draw their text as outlines)
-// with libbdf and with the reference.
+// that draw no text (those of PDFs draw their text as outlines) with libbdf
+// and with the reference.
 func TestRenderTestdataMatchesReference(t *testing.T) {
 	docs, pages, pixels, apart, left := 0, 0, 0, 0, 0
 	for _, f := range documents(t) {
@@ -270,7 +297,7 @@ func TestRenderTestdataMatchesReference(t *testing.T) {
 				}
 				shapes := true
 				for _, l := range p.Layers {
-					shapes = shapes && drawsOnlyShapes(doc, l.Obj, seen)
+					shapes = shapes && drawsWhatIsDrawn(doc, l.Obj, seen)
 				}
 				if !shapes {
 					left++
@@ -313,7 +340,7 @@ func TestRenderTestdataMatchesReference(t *testing.T) {
 	if pages < 20 {
 		t.Errorf("only %d pages compared", pages)
 	}
-	t.Logf("%d pages of %d documents, %d pixels match (%s); %d pages draw text or images, which are not drawn yet", pages, docs, pixels, map[bool]string{true: "to the byte", false: fmt.Sprintf("closely; %d came out apart", apart)}[exactFloats], left)
+	t.Logf("%d pages of %d documents, %d pixels match (%s); %d pages draw text or SVG images, which are not drawn yet", pages, docs, pixels, map[bool]string{true: "to the byte", false: fmt.Sprintf("closely; %d came out apart", apart)}[exactFloats], left)
 }
 
 // TestWriteRenderSeeds writes the seeds of the libFuzzer target render_fuzz

@@ -45,6 +45,14 @@ set(BDF_SOURCES
   src/rstroke.c
   src/rsurface.c
   src/rpaint.c
+  src/img_png.c
+  src/img_jpeg.c
+  src/img_gif.c
+  src/img_bmp.c
+  src/img_vp8.c
+  src/img_vp8l.c
+  src/img_webp.c
+  src/rimage.c
   src/rdraw.c
   src/render.c
   src/version.c)
@@ -123,10 +131,12 @@ target_compile_options(bdf PRIVATE ${BDF_WARNINGS})
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   set(BDF_SINGLE_HEADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/single)
+  # the headers of src/, which the sources bring into the single header
+  file(GLOB BDF_INTERNAL_HEADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.h)
   set(BDF_SINGLE_HEADER ${BDF_SINGLE_HEADER_DIR}/bdf/bdf.h)
   add_custom_command(OUTPUT ${BDF_SINGLE_HEADER}
     COMMAND Python3::Interpreter ${CMAKE_CURRENT_SOURCE_DIR}/tools/amalgamate.py -o ${BDF_SINGLE_HEADER}
-    DEPENDS ${BDF_SOURCES} src/brotli_glue.c src/brotli_none.c src/bdf_internal.h src/raster_internal.h src/unicode_nfc.h src/unicode_fold.h include/bdf/bdf.h tools/amalgamate.py
+    DEPENDS ${BDF_SOURCES} ${BDF_INTERNAL_HEADERS} src/brotli_glue.c src/brotli_none.c include/bdf/bdf.h tools/amalgamate.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Generating the single-header bdf.h"
     VERBATIM)
@@ -147,6 +157,8 @@ if(BDF_BUILD_FUZZ)
   # So do objects drawn again and again by a renderer, and shadows blurred
   # over a thousand pixels.
   target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_DRAWN=65536 BDF_MAX_SHADOW_BLUR=16)
+  # And images of a hundred megapixels.
+  target_compile_definitions(bdf PRIVATE BDF_MAX_DECODE_PIXELS=1048576)
   add_subdirectory(fuzz)
 endif()
 

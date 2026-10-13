@@ -268,9 +268,7 @@ void bdfi_rpath_rect(bdfi_rpath *p, double x, double y, double w, double h) {
   bdfi_rpath_move_to(p, x, y);
 }
 
-/* A double as an int the way the reference's processor converts it: what is
- * no number, or too large for 64 bits, is the smallest int. */
-static int64_t bdfi_to_int(double v) {
+int64_t bdfi_to_int(double v) {
   if (!(v > -9223372036854775808.0 && v < 9223372036854775808.0)) {
     return INT64_MIN;
   }

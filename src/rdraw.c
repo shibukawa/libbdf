@@ -143,6 +143,7 @@ typedef union bdfi_any_shader {
   bdfi_shader base;
   bdfi_solid solid;
   bdfi_gradient_shader gradient;
+  bdfi_pattern_shader pattern;
 } bdfi_any_shader;
 
 /* The shader of a fill or stroke style drawn under m. */
@@ -154,7 +155,11 @@ static void bdfi_draw_shader(bdfi_drawer *d, const bdfi_style *s, const bdfi_mat
   }
   out->solid = bdfi_solid_of(0, 0, 0, 0);
   if (s->paint.kind == BDF_PAINT_PATTERN) {
-    return; /* images are not drawn yet: nothing */
+    bdfi_pattern_shader p;
+    if (bdfi_pattern_shader_init(&p, &s->paint, s->image, m, &d->r->oom)) {
+      out->pattern = p;
+    }
+    return;
   }
   const bdfi_lut *lut = bdfi_r_lut(d->r, s->owner, s->index, &s->paint);
   bdfi_gradient_shader g;
@@ -174,6 +179,9 @@ static bdfi_style bdfi_paint_style(bdfi_drawer *d, uint64_t i) {
   s.has_paint = 1;
   s.owner = d->obj;
   s.index = (size_t)i;
+  if (s.paint.kind == BDF_PAINT_PATTERN && s.paint.image < bdf_object_image_count(d->obj->obj)) {
+    s.image = bdfi_r_picture(d->r, bdf_object_image(d->obj->obj, (size_t)s.paint.image));
+  }
   return s;
 }
 
@@ -373,6 +381,61 @@ static void bdfi_draw_fill_path(bdfi_drawer *d, bdfi_rpath *p, uint8_t rule, con
   bdfi_any_shader sh;
   bdfi_draw_shader(d, &d->ctx->st.fill, m, &sh);
   bdfi_draw_paint(d, cov, &sh.base, 1);
+  bdfi_mask_unref(cov);
+}
+
+/* image: an image, or the part src (x, y, w, h in image pixels) of it,
+ * drawn into the rectangle (x, y, w, h). */
+static void bdfi_draw_image(bdfi_drawer *d, uint64_t i, const double *src, double x, double y,
+                            double w, double h) {
+  if (i >= bdf_object_image_count(d->obj->obj)) {
+    bdfi_r_warn(d->r, "bad image reference");
+    return;
+  }
+  bdfi_state *st = &d->ctx->st;
+  bdfi_rpath p;
+  memset(&p, 0, sizeof p);
+  bdfi_rpath_rect(&p, x, y, w, h);
+  if (p.oom) {
+    d->r->oom = 1;
+    bdfi_rpath_clear(&p);
+    return;
+  }
+  bdfi_mask *cov = bdfi_draw_coverage(d, &p, BDF_FILL_NONZERO, &st->m);
+  bdfi_rpath_clear(&p);
+  if (bdfi_mask_is_empty(cov) && !bdfi_unbounded(st->blend)) {
+    bdfi_mask_unref(cov);
+    return; /* it shows nowhere: not worth decoding */
+  }
+  bdfi_picture *pic = bdfi_r_picture(d->r, bdf_object_image(d->obj->obj, (size_t)i));
+  if (!pic || w == 0 || h == 0) {
+    bdfi_mask_unref(cov);
+    return;
+  }
+  double sx = 0, sy = 0, sw = (double)pic->w, sh = (double)pic->h;
+  if (src) {
+    sx = src[0];
+    sy = src[1];
+    sw = src[2];
+    sh = src[3];
+    if (sw == 0 || sh == 0) {
+      bdfi_mask_unref(cov);
+      return;
+    }
+  }
+  /* device to image pixels: the inverse of (m x destination from source) */
+  bdfi_mat place = {{w / sw, 0, 0, h / sh, x - sx * w / sw, y - sy * h / sh}};
+  bdfi_mat full = bdfi_mat_mul2(st->m, place), inv;
+  if (!bdfi_mat_invert(&full, &inv)) {
+    bdfi_mask_unref(cov);
+    return;
+  }
+  double lx = bdfi_fmin(sx, sx + sw), ly = bdfi_fmin(sy, sy + sh);
+  bdfi_image_shader sh2;
+  bdfi_image_shader_init(&sh2, pic, &inv, st->smooth, bdfi_fmax(0, lx), bdfi_fmax(0, ly),
+                         bdfi_fmin((double)pic->w, lx + fabs(sw)),
+                         bdfi_fmin((double)pic->h, ly + fabs(sh)), &d->r->oom);
+  bdfi_draw_paint(d, cov, &sh2.base, 1);
   bdfi_mask_unref(cov);
 }
 
@@ -1036,9 +1099,17 @@ static void bdfi_draw_instr(bdfi_drawer *d, const bdf_instr *in) {
     bdfi_r_warn(d->r, "text is not drawn");
     break;
   case BDF_OP_IMAGE:
-  case BDF_OP_IMAGE_SUB:
-    bdfi_r_warn(d->r, "images are not drawn");
+    bdfi_draw_image(d, U(0), NULL, F(1), F(2), F(3), F(4));
     break;
+  case BDF_OP_IMAGE_SUB: {
+    double src[4];
+    src[0] = F(1);
+    src[1] = F(2);
+    src[2] = F(3);
+    src[3] = F(4);
+    bdfi_draw_image(d, U(0), src, F(5), F(6), F(7), F(8));
+    break;
+  }
   case BDF_OP_SMOOTHING:
     st->smooth = U(0) != 0;
     break;
@@ -1163,6 +1234,7 @@ bdfi_drawer *bdfi_drawer_new(struct bdf_renderer *r, const bdfi_mat *m, int w, i
     return NULL;
   }
   d->r = r;
+  r->drawing++;
   d->top = ctx;
   bdfi_set_ctx(d, ctx);
   ctx->target = s;
