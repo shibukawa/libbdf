@@ -137,7 +137,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBDF_BUILD_FUZZ=ON -DBDF_SANITIZE=address,undefined -DBDF_BUILD_TESTS=OFF
           cmake --build build
           mkdir -p fuzz/findings
-          for t in object inflate manifest doc woff2 text unlock search render image font; do
+          for t in object inflate manifest doc woff2 text unlock search render image font svg svgdoc; do
             mkdir -p "fuzz/corpus/$t"
             "./build/fuzz/${t}_fuzz" "fuzz/corpus/$t" -max_total_time=$(( ${{ github.event.inputs.fuzz-minutes }} * 60 )) -artifact_prefix="fuzz/findings/$t-"
           done
@@ -147,6 +147,8 @@ jobs:
           for t in FuzzObject FuzzInflate FuzzDoc FuzzWOFF2 FuzzText FuzzIndexPart FuzzUnlock FuzzSealed FuzzNFC FuzzGCM FuzzP256 FuzzPNG FuzzJpeg FuzzGif FuzzBmp FuzzWebp FuzzFont; do
             go test -run '^$' -fuzz "^$t\$" -fuzztime "${{ github.event.inputs.fuzz-minutes }}m" -fuzzminimizetime 20x .
           done
+          # the reader of SVG documents has its tests in a package of its own
+          go test -run '^$' -fuzz '^FuzzSVG$' -fuzztime "${{ github.event.inputs.fuzz-minutes }}m" -fuzzminimizetime 20x ./svgdoc
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("encoding=\"x=><svg>\x8e?5\xdcޘ\xbeR<?xml\tencoding=\"latin5\"?>")

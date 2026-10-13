@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"maps"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -179,6 +181,15 @@ func TestRenderTextMatchesReference(t *testing.T) {
 	compareDocuments(t, dirs, fonts, func(r *rand.Rand) *bdf.Document { return RandomTextDocument(r, programs) })
 }
 
+// TestRenderSVGMatchesReference draws documents with SVG images (shapes,
+// gradients, clip paths, text, images inside them) with both renderers.
+func TestRenderSVGMatchesReference(t *testing.T) {
+	dirs := fontDirs(t)
+	fonts := fontsOf(t, dirs)
+	defer fonts.Close()
+	compareDocuments(t, dirs, fonts, RandomSVGDocument)
+}
+
 // TestRenderImagesMatchReference does the same with documents that draw
 // images: whole and in parts, as patterns, smoothed and not, some turned
 // by their EXIF orientation, and some that cannot be decoded.
@@ -192,6 +203,7 @@ func compareDocuments(t *testing.T, fontDirs []string, fonts *Fonts, random func
 	cases, r := renderSeed(t)
 	cases = max(cases/6, 10)
 	images, pixels, apart := 0, 0, 0
+	warned := map[string]int{}
 	for i := range cases {
 		doc := random(r)
 		var buf bytes.Buffer
@@ -279,8 +291,21 @@ func compareDocuments(t *testing.T, fontDirs []string, fonts *Fonts, random func
 				}
 			}
 		}
+		// what the two could not draw is the same, in the order they met it
+		if want, got := ref.Warnings(), cr.Warnings(); !slices.Equal(want, got) {
+			os.WriteFile(os.Getenv("LIBBDF_RENDER_DUMP")+".bdf", buf.Bytes(), 0o644)
+			t.Fatalf("document %d: the reference warns\n  %s\nlibbdf\n  %s", i, strings.Join(want, "\n  "), strings.Join(got, "\n  "))
+		}
+		for _, w := range cr.Warnings() {
+			warned[w]++
+		}
 		cr.Close()
 		cdoc.Close()
+	}
+	if os.Getenv("LIBBDF_RENDER_WARNINGS") != "" {
+		for _, w := range slices.Sorted(maps.Keys(warned)) {
+			t.Logf("%4d  %s", warned[w], w)
+		}
 	}
 	if apart*100 > images+apart {
 		t.Errorf("%d of %d images are not close to the reference's", apart, images+apart)
@@ -332,49 +357,11 @@ func fontsOf(t testing.TB, dirs []string) *Fonts {
 	return fonts
 }
 
-// isSVG is isSVG of the reference: SVG markup rather than an encoded bitmap.
-func isSVG(b []byte) bool {
-	if len(b) >= 2 && (b[0] == 0xff && b[1] == 0xfe || b[0] == 0xfe && b[1] == 0xff) {
-		return true
-	}
-	b = bytes.TrimPrefix(b, []byte("\xef\xbb\xbf"))
-	b = bytes.TrimLeft(b, " \t\r\n")
-	return len(b) > 0 && b[0] == '<'
-}
-
-// drawsWhatIsDrawn reports whether an object and the objects it draws draw
-// nothing the rasterizer leaves out yet: no SVG images.
-func drawsWhatIsDrawn(doc *bdf.Document, h bdf.Hash, seen map[bdf.Hash]bool) bool {
-	if ok, done := seen[h]; done {
-		return ok
-	}
-	seen[h] = true // an object that draws itself is not what decides
-	part := doc.Part(h)
-	if part == nil {
-		return true
-	}
-	o, err := bdf.DecodeObject(part.Data)
-	if err != nil {
-		return true
-	}
-	ok := true
-	for _, ih := range o.Images {
-		if p := doc.Part(ih); p != nil {
-			ok = ok && !isSVG(p.Data)
-		}
-	}
-	for _, c := range o.Objects {
-		ok = ok && drawsWhatIsDrawn(doc, c, seen)
-	}
-	seen[h] = ok
-	return ok
-}
-
 // TestRenderTestdataMatchesReference draws the pages of the test documents
 // with libbdf and with the reference: their text in the fonts they carry,
 // and what names a font in the fonts of the bdf module's own tests.
 func TestRenderTestdataMatchesReference(t *testing.T) {
-	docs, pages, pixels, apart, left := 0, 0, 0, 0, 0
+	docs, pages, pixels, apart := 0, 0, 0, 0
 	dirs := fontDirs(t)
 	fonts := fontsOf(t, dirs)
 	defer fonts.Close()
@@ -388,7 +375,6 @@ func TestRenderTestdataMatchesReference(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		seen := map[bdf.Hash]bool{}
 		drawn := 0
 		for vi, v := range doc.Views {
 			if v.Kind == bdf.ViewSheet {
@@ -397,14 +383,6 @@ func TestRenderTestdataMatchesReference(t *testing.T) {
 			for pi, p := range v.Pages {
 				if pi >= 6 {
 					break // the first pages of a long document say what the rest would
-				}
-				shapes := true
-				for _, l := range p.Layers {
-					shapes = shapes && drawsWhatIsDrawn(doc, l.Obj, seen)
-				}
-				if !shapes {
-					left++
-					continue
 				}
 				scale := 1.0
 				if float64(p.W)*float64(p.H) > 1200*1200 {
@@ -443,7 +421,7 @@ func TestRenderTestdataMatchesReference(t *testing.T) {
 	if pages < 20 {
 		t.Errorf("only %d pages compared", pages)
 	}
-	t.Logf("%d pages of %d documents, %d pixels match (%s); %d pages draw SVG images, which are not drawn yet", pages, docs, pixels, map[bool]string{true: "to the byte", false: fmt.Sprintf("closely; %d came out apart", apart)}[exactFloats], left)
+	t.Logf("%d pages of %d documents, %d pixels match (%s)", pages, docs, pixels, map[bool]string{true: "to the byte", false: fmt.Sprintf("closely; %d came out apart", apart)}[exactFloats])
 }
 
 // TestWriteRenderSeeds writes the seeds of the libFuzzer target render_fuzz

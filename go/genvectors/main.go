@@ -540,7 +540,48 @@ func renderVectors(path string) {
 	o.bytes("rv_text_documents", all)
 	o.b.WriteString("static const struct {\n  size_t off, len;\n} rv_text_document[RV_TEXT_DOCUMENTS] = {\n" + strings.Join(docRows, "\n") + "\n};\n\n")
 	o.comment("what the reference draws of them with the fonts above: the document, and the rest as in rv_render")
-	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_text_render[RV_TEXT_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
+	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_text_render[RV_TEXT_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n\n")
+
+	// SVG images: documents that draw them, with text in the fonts above
+	all, rows, docRows = nil, nil, nil
+	for di := 0; di < 4; di++ {
+		for {
+			doc = cbdf.RandomSVGDocument(r)
+			file.Reset()
+			if err := doc.WriteSingle(&file); err != nil {
+				log.Fatal(err)
+			}
+			if file.Len() < 12<<10 && len(doc.Views[0].Pages) >= 2 {
+				break
+			}
+		}
+		read = must(must(bdf.OpenSingle(bytes.NewReader(file.Bytes()), int64(file.Len()))).ToDocument())
+		ref = imagebdf.New(read, &imagebdf.Options{FontDirs: []string{fontDir}, NoSystemFonts: true})
+		docRows = append(docRows, fmt.Sprintf("    {%d, %d},", len(all), file.Len()))
+		all = append(all, file.Bytes()...)
+		drawSVG := func(view, page int, scale float64, region bdf.Rect, w, h int) {
+			var img *image.RGBA
+			if scale > 0 {
+				img = must(ref.Page(read.Views[view], page, scale))
+			} else {
+				img = must(ref.Region(read.Views[view], page, region, w, h))
+			}
+			rows = append(rows, fmt.Sprintf("    {%d, %d, %d, %v, {%v, %v, %v, %v}, %d, %d, 0x%016xull},", di, view, page, scale,
+				region.X, region.Y, region.W, region.H, img.Rect.Dx(), img.Rect.Dy(), fnv(img.Pix)))
+		}
+		// the same image at several scales: a raster of it for each
+		for pi := range read.Views[0].Pages {
+			drawSVG(0, pi, []float64{1, 0.5, 2.5}[pi%3], bdf.Rect{}, 0, 0)
+			drawSVG(0, pi, 0, bdf.Rect{X: 13, Y: 7.5, W: 90, H: 71}, 270, 213)
+		}
+		drawSVG(1, 0, 0, bdf.Rect{X: 0, Y: 0, W: 200, H: 300}, 100, 150)
+	}
+	fmt.Fprintf(&o.b, "#define RV_SVG_DOCUMENTS %d\n#define RV_SVG_RENDERS %d\n", len(docRows), len(rows))
+	o.comment("random documents that draw SVG images (go/svgs.go), one after the other: where each starts and how\n * long it is")
+	o.bytes("rv_svg_documents", all)
+	o.b.WriteString("static const struct {\n  size_t off, len;\n} rv_svg_document[RV_SVG_DOCUMENTS] = {\n" + strings.Join(docRows, "\n") + "\n};\n\n")
+	o.comment("what the reference draws of them with the fonts above: the document, and the rest as in rv_render")
+	o.b.WriteString("static const struct {\n  size_t doc, view, page;\n  double scale;\n  float region[4];\n  int w, h;\n  uint64_t hash;\n} rv_svg_render[RV_SVG_RENDERS] = {\n" + strings.Join(rows, "\n") + "\n};\n")
 	o.write(path, "random drawings and random documents with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
 }
 

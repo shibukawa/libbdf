@@ -1,5 +1,5 @@
 set(BDF_TESTS object header inflate manifest doc font text search unlock render canvas)
-set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock search render image font)
+set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock search render image font svg)
 
 if(MSVC)
   set(BDF_TEST_WARNINGS /W4)
@@ -43,6 +43,23 @@ foreach(name woff2_internal text_internal crypto_internal conformance)
     target_link_libraries(test_${name} PRIVATE ${BDF_LIBM})
   endif()
 endforeach()
+# The fuzz target of the reader of SVG documents asks the functions of
+# src/svg_internal.h, which a shared library does not show: its replay is
+# built from the sources as well.
+add_executable(test_replay_svgdoc replay.c ../fuzz/svgdoc_fuzz.c ${BDF_ABS_SOURCES} ${BDF_BROTLI_OBJECTS})
+target_include_directories(test_replay_svgdoc PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src)
+if(BDF_BROTLI_INCLUDE)
+  target_include_directories(test_replay_svgdoc SYSTEM PRIVATE ${BDF_BROTLI_INCLUDE})
+endif()
+target_compile_features(test_replay_svgdoc PRIVATE c_std_11)
+if(BDF_LIBM)
+  target_link_libraries(test_replay_svgdoc PRIVATE ${BDF_LIBM})
+endif()
+file(GLOB inputs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../fuzz/regress/svgdoc/*
+  ${CMAKE_CURRENT_SOURCE_DIR}/../fuzz/regress/svg/*)
+list(FILTER inputs EXCLUDE REGEX "/\\.gitkeep$")
+add_test(NAME replay-svgdoc COMMAND test_replay_svgdoc ${inputs})
+
 add_test(NAME woff2-internal COMMAND test_woff2_internal)
 add_test(NAME text-internal COMMAND test_text_internal)
 add_test(NAME crypto-internal COMMAND test_crypto_internal)

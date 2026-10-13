@@ -6,11 +6,11 @@ require (
 	github.com/klauspost/compress v1.20.1
 	github.com/shibukawa/bdf v0.1.5
 	golang.org/x/image v0.46.0
+	golang.org/x/net v0.60.0
 	golang.org/x/text v0.42.0
 )
 
 require (
 	github.com/andybalholm/brotli v1.2.5 // indirect
 	github.com/shibukawa/tinygodriver v1.3.4 // indirect
-	golang.org/x/net v0.60.0 // indirect
 )
