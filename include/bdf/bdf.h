@@ -1089,6 +1089,151 @@ BDF_API bdf_status bdf_render_object(const bdf_object *obj, double scale,
 BDF_API size_t bdf_renderer_warning_count(const bdf_renderer *renderer);
 BDF_API const char *bdf_renderer_warning(const bdf_renderer *renderer, size_t i);
 
+/* ---- Drawing through another canvas -------------------------------------- */
+
+/*
+ * bdf_play_page draws a page through the functions of a bdf_canvas instead
+ * of into pixels of its own: the way to draw a document with Skia,
+ * CoreGraphics, cairo, QPainter or any other 2D library (adapters/ has
+ * canvases for these). The renderer does what belongs to the format, and
+ * the canvas only what a 2D library has under one name or another:
+ *
+ *   - it runs the instructions of the page's objects and of the objects
+ *     they draw, keeps the drawing state, and hands every drawing over with
+ *     the whole style it is drawn in (colour or paint, alpha, composite
+ *     operation, shadow, line);
+ *   - paths come as moves, lines, quadratic and cubic curves and closes;
+ *   - images come decoded, as premultiplied RGBA;
+ *   - text comes as the outlines of its glyphs, laid out as bdf_render_page
+ *     lays it out, unless the canvas draws text itself (text);
+ *   - soft masks are drawn by libbdf and come as an image to multiply what
+ *     was drawn by.
+ *
+ * Coordinates are those of the page: the canvas is expected to map them to
+ * its pixels (scale says how many pixels a unit is, for the images libbdf
+ * draws itself) and to have filled the background. The page is clipped to
+ * its rectangle.
+ *
+ * A canvas function must not call back into the renderer. Pointers given to
+ * it are valid during the call only, except that a bitmap with an id other
+ * than 0 has the same pixels whenever the same id is given again while the
+ * renderer lives: a canvas may keep what it made of them by that id.
+ */
+
+/* A path: verbs is BDF_VERB_MOVE, _LINE, _QUAD, _CUBIC and _CLOSE only, and
+ * coords holds their 2, 2, 4, 6 and 0 numbers one after the other. Every
+ * move is followed by a line or a curve at least. A path of no verbs is
+ * given to clip alone, where it clips everything away. */
+typedef struct bdf_canvas_path {
+  const uint8_t *verbs;
+  size_t nverbs;
+  const double *coords;
+  size_t ncoords;
+} bdf_canvas_path;
+
+typedef struct bdf_canvas_bitmap {
+  uint64_t id; /* 0: the pixels are of this call alone */
+  int width, height;
+  const uint8_t *pixels; /* premultiplied RGBA, 4*width bytes a row */
+} bdf_canvas_bitmap;
+
+/* A gradient, or a pattern of an image. */
+typedef struct bdf_canvas_paint {
+  uint8_t kind;        /* BDF_PAINT_* */
+  const float *coords; /* gradients: as in bdf_paint */
+  size_t ncoords;
+  const bdf_stop *stops;
+  size_t nstops;
+  const bdf_canvas_bitmap *image; /* patterns */
+  uint8_t repeat;                 /* BDF_REPEAT* */
+  double matrix[6];               /* pattern: its space in the user space */
+} bdf_canvas_paint;
+
+/* What a drawing is drawn with. */
+typedef struct bdf_canvas_style {
+  uint32_t color;                /* 0xRRGGBBAA, not premultiplied; without a paint */
+  const bdf_canvas_paint *paint; /* or NULL */
+  float alpha;                   /* of the whole drawing, on top of the colour's */
+  uint8_t blend;                 /* BDF_BLEND_* */
+  /* a shadow when the colour has alpha and blur or an offset is not 0: in
+   * units of the page, whatever the transform is (as Canvas 2D has them) */
+  uint32_t shadow_color;
+  double shadow_blur, shadow_dx, shadow_dy;
+  int smoothing; /* images: interpolate between their pixels */
+} bdf_canvas_style;
+
+typedef struct bdf_canvas_line {
+  double width;
+  uint8_t cap, join; /* BDF_CAP_*, BDF_JOIN_* */
+  double miter;
+  const float *dash; /* on, off, ... in user space; NULL: solid */
+  size_t ndash;
+  double dash_offset;
+} bdf_canvas_line;
+
+/* A string for a canvas that draws text itself. */
+typedef struct bdf_canvas_text {
+  const char *text; /* UTF-8 */
+  size_t len;
+  double x, y;      /* the anchor */
+  double advance;   /* the width the string had where it was written, or 0 */
+  int stroke;       /* outlined (with the line and the stroke style) instead of filled */
+  const bdf_font *font;     /* the font asked for; NULL: none was set (sans-serif) */
+  const uint8_t *font_data; /* an embedded font as an sfnt file (unpacked from WOFF2), or NULL */
+  size_t font_len;
+  uint64_t font_id; /* as the id of a bitmap: the same for the same font_data */
+  double size;
+  uint8_t align, baseline, dir; /* BDF_ALIGN_*, BDF_BASELINE_*, BDF_DIR_* */
+  double spacing;               /* between letters */
+} bdf_canvas_text;
+
+typedef struct bdf_canvas {
+  void *ctx; /* given to every function */
+
+  /* The state of the canvas that libbdf leaves to it: the transform and the
+   * clip. save and restore nest, and layers nest with them. */
+  void (*save)(void *ctx);
+  void (*restore)(void *ctx);
+  /* Concatenates a matrix: the new user space in the old one. */
+  void (*transform)(void *ctx, const double m[6]);
+  /* Intersects the clip with a path (rule: BDF_FILL_*). */
+  void (*clip)(void *ctx, const bdf_canvas_path *path, uint8_t rule);
+
+  void (*fill)(void *ctx, const bdf_canvas_path *path, uint8_t rule, const bdf_canvas_style *style);
+  void (*stroke)(void *ctx, const bdf_canvas_path *path, const bdf_canvas_line *line,
+                 const bdf_canvas_style *style);
+  /* Draws the part src (x, y, w, h in its pixels, within it) of a bitmap
+   * into the rectangle dst (x, y, w, h, both positive) of the user space.
+   * Of the style, the alpha, the blend, the shadow and smoothing apply. */
+  void (*image)(void *ctx, const bdf_canvas_bitmap *bitmap, const double src[4], const double dst[4],
+                const bdf_canvas_style *style);
+
+  /* What is drawn until end_layer is drawn on a transparent canvas of its
+   * own and then composited as one with an alpha and a blend mode. bounds
+   * (x, y, w, h in user space) holds all of it. begin_layer saves the
+   * state as save does, and end_layer restores it. */
+  void (*begin_layer)(void *ctx, const double bounds[4], float alpha, uint8_t blend);
+  void (*end_layer)(void *ctx);
+
+  /* Optional (NULL: libbdf draws the outlines of the glyphs through fill
+   * and stroke). Returns 0 to have libbdf draw this string after all. */
+  int (*text)(void *ctx, const bdf_canvas_text *text, const bdf_canvas_line *line,
+              const bdf_canvas_style *style);
+} bdf_canvas;
+
+/*
+ * bdf_play_page draws a page of a fixed or flow view, or a strip of a
+ * scroll view, through canvas. scale is the device pixels a unit of the
+ * page takes on the canvas (1 when unknown). What cannot be drawn is among
+ * the renderer's warnings afterwards.
+ */
+BDF_API bdf_status bdf_play_page(bdf_renderer *renderer, size_t view, size_t page, double scale,
+                                 const bdf_canvas *canvas, bdf_error *err);
+/* bdf_play_part does the same with one object part of the document, in the
+ * object's own coordinates and without a clip: a tile of a sheet, a master. */
+BDF_API bdf_status bdf_play_part(bdf_renderer *renderer, const uint8_t hash[16], double scale,
+                                 const bdf_canvas *canvas, bdf_error *err);
+
 /* ---- Cue index (spec §4.4) ---------------------------------------------- */
 
 typedef struct bdf_cues bdf_cues;

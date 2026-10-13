@@ -1,4 +1,4 @@
-set(BDF_TESTS object header inflate manifest doc font text search unlock render)
+set(BDF_TESTS object header inflate manifest doc font text search unlock render canvas)
 set(BDF_FUZZ_TARGETS object inflate manifest doc woff2 text unlock search render image font)
 
 if(MSVC)

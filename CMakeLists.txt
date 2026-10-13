@@ -14,6 +14,8 @@ option(BDF_BUILD_FUZZ "Build the libFuzzer harnesses (clang only)" OFF)
 option(BDF_WERROR "Treat warnings as errors" OFF)
 option(BDF_INSTALL "Generate the install rules" ${PROJECT_IS_TOP_LEVEL})
 option(BDF_WITH_BROTLI "Decode WOFF2 fonts with the vendored Brotli decoder (third_party/brotli)" ON)
+option(BDF_CAIRO "Build bdf::cairo, which draws documents with cairo" OFF)
+option(BDF_COREGRAPHICS "Build bdf::coregraphics, which draws documents with Core Graphics" OFF)
 set(BDF_SANITIZE "" CACHE STRING "Sanitizers to build everything with, e.g. address,undefined")
 set(BDF_CONFORMANCE_DIR "" CACHE PATH "A conformance suite written by `bdf conformance`, run by ctest")
 
@@ -56,6 +58,7 @@ set(BDF_SOURCES
   src/sfnt.c
   src/fontdb.c
   src/rtext.c
+  src/rcanvas.c
   src/rdraw.c
   src/render.c
   src/version.c)
@@ -170,8 +173,10 @@ if(BDF_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
+add_subdirectory(adapters)
+
 if(BDF_INSTALL)
-  install(TARGETS bdf EXPORT bdfTargets
+  install(TARGETS bdf ${BDF_ADAPTER_TARGETS} EXPORT bdfTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -191,4 +196,12 @@ if(BDF_INSTALL)
   configure_file(cmake/bdf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+  # An adapter that pkg-config can name what it needs for has a file of its own.
+  if(BDF_CAIRO)
+    set(BDF_ADAPTER_NAME cairo)
+    set(BDF_ADAPTER_REQUIRES cairo)
+    configure_file(cmake/bdf-adapter.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf-cairo.pc @ONLY)
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf-cairo.pc
+      DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+  endif()
 endif()

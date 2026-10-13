@@ -92,6 +92,19 @@ static bdfi_face *bdfi_r_part_face(struct bdf_renderer *r, const uint8_t hash[16
   return o->font;
 }
 
+BDF_INTERNAL const uint8_t *bdfi_r_font_data(struct bdf_renderer *r, const uint8_t hash[16],
+                                             size_t *len, uint64_t *id) {
+  bdfi_face *f = bdfi_r_part_face(r, hash);
+  *len = 0;
+  *id = 0;
+  if (!f) {
+    return NULL;
+  }
+  /* the place of the part among the parts, which does not change */
+  *id = (uint64_t)(bdfi_r_part_slot(r, hash) - r->parts) + 1;
+  return bdfi_face_data(f, len);
+}
+
 static bdfi_rfile *bdfi_r_file(struct bdf_renderer *r, size_t face) {
   if (!r->files) {
     size_t n = bdf_fonts_count(r->fonts);

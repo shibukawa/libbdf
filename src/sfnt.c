@@ -944,6 +944,8 @@ typedef struct bdfi_glyph_page {
 
 struct bdfi_face {
   uint8_t *owned; /* the bytes of the font, when the face keeps them */
+  const uint8_t *data;
+  size_t len;
   bdfi_span glyf, loca, head, hmtx;
   int is_cff;
   int64_t num_glyphs;
@@ -1061,6 +1063,8 @@ BDF_INTERNAL bdfi_face *bdfi_face_new(const uint8_t *data, size_t len, int index
   if (take) {
     f->owned = (uint8_t *)(uintptr_t)data;
   }
+  f->data = data;
+  f->len = len;
   bdfi_span all = {data, len};
   bdfi_span maxp = {NULL, 0}, hhea = {NULL, 0}, cmap = {NULL, 0}, name = {NULL, 0}, cff = {NULL, 0};
   int ok = len >= 12;
@@ -1175,6 +1179,12 @@ BDF_INTERNAL bdfi_face *bdfi_face_new(const uint8_t *data, size_t len, int index
  * application's fonts without them has no glyphs to draw. */
 BDF_INTERNAL int bdfi_face_has_metrics(const bdfi_face *f) {
   return f->has_advances && f->advances > 0;
+}
+
+/* The bytes of the font the face was made of. */
+BDF_INTERNAL const uint8_t *bdfi_face_data(const bdfi_face *f, size_t *len) {
+  *len = f->len;
+  return f->data;
 }
 
 BDF_INTERNAL double bdfi_face_upem(const bdfi_face *f) { return f->upem; }

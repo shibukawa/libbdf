@@ -408,8 +408,9 @@ typedef struct bdfi_picture {
   int32_t w, h;
   bdfi_bitmap levels[BDFI_MAX_LEVELS];
   int nlevels;
-  uint64_t used; /* the drawing that used it last */
-  size_t part;   /* the part it is the image of */
+  uint64_t used;   /* the drawing that used it last */
+  size_t part;     /* the part it is the image of */
+  uint64_t serial; /* its number among the pictures of the renderer: never given again */
 } bdfi_picture;
 
 BDF_INTERNAL bdf_status bdfi_picture_decode(const uint8_t *data, size_t len, bdfi_picture **out,
@@ -536,6 +537,12 @@ BDF_INTERNAL int bdfi_chain_layout(struct bdf_renderer *r, bdfi_chain *c, const 
 BDF_INTERNAL double bdfi_chain_baseline_shift(const bdfi_chain *c, uint8_t baseline, double size);
 BDF_INTERNAL double bdfi_fake_bold_width(double size);
 BDF_INTERNAL void bdfi_r_fonts_free(struct bdf_renderer *r);
+/* The sfnt bytes of an embedded font part (unpacked from WOFF2), which the
+ * renderer keeps, and a number that is the font's while the renderer lives.
+ * NULL for a part that is no font. */
+BDF_INTERNAL const uint8_t *bdfi_r_font_data(struct bdf_renderer *r, const uint8_t hash[16],
+                                             size_t *len, uint64_t *id);
+BDF_INTERNAL const uint8_t *bdfi_face_data(const bdfi_face *f, size_t *len);
 
 /* ---- The renderer -------------------------------------------------------- */
 
@@ -582,6 +589,7 @@ struct bdf_renderer {
   size_t nkept, cap_kept;
   int64_t pixels, room; /* of the pictures kept, and the most of them */
   uint64_t drawing;     /* counts the images drawn */
+  uint64_t pictures;    /* counts the pictures decoded */
   const bdf_fonts *fonts;    /* the application's fonts, or NULL */
   struct bdfi_rfile *files;  /* what was read of their faces, by face */
   size_t nfiles;
@@ -721,6 +729,7 @@ typedef struct bdfi_drawer {
 /* A drawer on a new canvas of w × h pixels with the device transform m:
  * NULL when out of memory. */
 BDF_INTERNAL bdfi_drawer *bdfi_drawer_new(struct bdf_renderer *r, const bdfi_mat *m, int w, int h);
+BDF_INTERNAL void bdfi_drawer_instr(bdfi_drawer *d, bdfi_robj *o, const bdf_instr *in);
 BDF_INTERNAL void bdfi_drawer_free(bdfi_drawer *d);
 /* Draws a top-level object from the initial state with a transform and a
  * clip. */
