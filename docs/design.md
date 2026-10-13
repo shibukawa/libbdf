@@ -14,7 +14,7 @@ bdf（Go の参照実装と TypeScript のビューア）とは別に、ネイ�
 core      コンテナ（single/split）、manifest（自前の JSON）、Part、deflate-raw（自前）、
           Object のデコード、WOFF2 → SFNT、テキスト run（選択・検索・リンク）、読み上げ用の構造、
           正規化つきの検索、暗号化の開錠、区間
-raster    純粋な C のラスタライザ。bdf の raster/imagebdf の移植。FreeType で字形を取る
+raster    純粋な C のラスタライザ。bdf の raster/imagebdf の移植（§13）
 adapters  core の命令列をフレームワークのキャンバスに流す薄い層
           skia/ (C++)  cairo/ (C)  qt/ (C++)  coregraphics/ (ObjC)
 ```
@@ -54,7 +54,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
 - **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
-- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock・search の 8 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
+- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock・search・render の 9 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
 
 cgo を選んで purego にしなかったのは、`go build -asan` が cgo にしか効かないことと、同じツリーの C ソースを静的に結合したかったからである。利用者向けに cgo なしの Go 束縛を出すなら、そのときは purego で別に作る。
 
@@ -114,7 +114,7 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 3. ~~WOFF2 → SFNT。~~ 済み。testdata の全フォントで参照実装とバイト単位で一致、差分 fuzz（`FuzzWOFF2`）あり。hmtx 変換は参照実装のエンコーダが書かないので、手で組んだ流れの単体テストで押さえた（`tests/woff2_internal.c`）。
 4. ~~テキスト run、リンク、テキスト索引。~~ 済み（View のテキストと検索用テキスト、cue 索引も）。読み上げ用の構造と正規化つきの検索も済み（§12）。
 5. ~~暗号化。~~ 済み。パスワードと ECDH の開錠、区間（§3.6）の合成。暗号の部品は自前（§11）。
-6. ラスタライザの移植と、bdf の golden との比較。
+6. ラスタライザの移植。ベクタの中核は済み（§13）。残りは画像（PNG、JPEG、GIF、BMP、WebP とパターン）、テキスト（埋め込みフォントとシステム フォント）、SVG。
 7. アダプタ。最初は Skia（Chrome の Canvas 2D の実体なので TS 版との差が最も小さく、SkiaSharp 経由で MAUI もすぐ使える）。
 
 ## 10. 参考値
@@ -165,4 +165,43 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 
 - SAVE / RESTORE がマスク（MASK_BEGIN〜MASK_END）の境界をまたぐ命令列。Go の `text.go` はマスクの中を丸ごと飛ばし、TS の `text.ts` はマスクの中の RESTORE も実行して MASK_END でもう 1 度戻す。マスクの後の run の位置が変わる。
 - 文字列の先頭の BOM。TS は `TextDecoder` が落とし、Go は残す。libbdf は文字列をそのまま返すが、検索と図の幅では TS と同じく無いものとして扱う。
+
+## 13. ラスタライザ
+
+`raster/imagebdf`（Go）を演算の順序と型まで同じにして C に移した。**参照実装と 1 バイトも違わない絵を出す**ことを目標にし、ベクタの中核ではそれを達成している。libc 以外に依存せず、core と同じライブラリ・同じ単一ヘッダに入る。
+
+**構成**（`src/r*.c`、`render.c`、内部ヘッダは `raster_internal.h`）:
+
+| ファイル | Go の対応 | 内容 |
+|---|---|---|
+| `rmath.c` | `math` パッケージ | sin、cos、tan、atan、atan2、asin、acos、hypot、max、min |
+| `rpath.c` | `path.go` | 変換行列、Path2D（ellipse、arcTo、roundRect）、折れ線化 |
+| `rscan.c` | `scan.go` | マスク、矩形の厳密な被覆、スキャンライン（1 行 16 サンプル、x は厳密） |
+| `rstroke.c` | `stroke.go` | 線の輪郭（継ぎ目、端、破線）、輪郭点と破線数の上限 |
+| `rsurface.c` | `surface.go` | float の乗算済み RGBA キャンバス、合成演算 26 種とブレンド モード |
+| `rpaint.c` | `paint.go` | グラデーションの 1024 段の表、線形・放射（2 円）・円錐 |
+| `rdraw.c` | `draw.go` | 状態、命令の実行、クリップ、グループ、ソフト マスク、影 |
+| `render.c` | `imagebdf.go`、`object.go` | ページ、連続ビュー、シートと罫線、単体の Object、公開 API |
+
+**同じ絵にするために必要だったこと**。
+
+- **FMA を使わない**。積と和を 1 命令にまとめると丸めが 1 回になり、100 万画素に 1 つが 1 段ずれる。Go は amd64 でまとめず、arm64 でまとめる。libbdf はどこでもまとめない（`raster_internal.h` が各コンパイラの pragma で切り、CMake も `-ffp-contract=off` を付ける）。gcc 12（aarch64、`-std=gnu11 -O2`）で確かめた: pragma を外すとスキャンラインに FMA が 199 個入り、テストの絵が 2 枚変わる。付ければ 0 個で、絵は同じ。
+- **Go の math を移植する**。libc の sin や atan は実装ごとに最後の 1 ビットが違い、Go とも違う。Go の実装（Cephes 由来、BSD ライセンス。表記は `third_party/go-math/LICENSE`）を `rmath.c` に移した。sqrt、fmod、floor、ceil、round は厳密な演算なので libm のものを使う。amd64 で Go と約 480 万の入力がビット単位で一致。
+- **定数を Go と同じに丸める**。Go の定数式は使うまで任意精度なので、`3*math.Pi/2` は 3π/2 に最も近い double で、π の double の 3 倍ではない。必要な定数は Go に計算させて 17 桁で書いた。
+- **整数への変換を amd64 に合わせる**。NaN や範囲外の値を int にすると Go は処理系依存で、amd64 では最小の int になる。C では未定義なので、その値を明示的に返す（`segmentsFor`、円の分割数、ソフト マスクの輝度）。
+- **`math.Max` と組み込みの `max` を区別する**。前者は ±Inf が NaN に勝ち、後者は NaN が勝つ。
+
+**検証**。Go 側のハーネスが、乱数で作った描画（全命令をでたらめな順に: パス、塗りと線、破線、クリップ、グラデーション、合成演算、影、グループ、マスク、USE）と文書（Object どうしの USE、複数レイヤーのページ、本文で切った帯、タイルと罫線のシート）を両方で描いて画素を比べる。amd64 では完全一致を要求する。手元で確認した範囲は、単体の Object 約 2 万 4 千個（約 14 億画素）、文書約 2,000 本・3 万枚（約 7.5 億画素）、testdata のうち図形だけでできたページ 36 枚（PDF 由来のページは文字をアウトラインで描くので対象になる）。arm64 では Go の側が FMA で別の絵を出すので、近いことだけを見る。
+
+C だけのテスト（`tests/test_render.c`）は、手で画素を言える描画と、**参照実装（amd64）が描いた絵のハッシュ**（`tests/render_vectors.h`、`GOARCH=amd64 go run -C go ./genvectors tests render`）を持つ。後者は「どのプラットフォームのどのコンパイラでも同じ絵」の検査で、clang（arm64、Debug と Release）と gcc 12（aarch64、`-O0`〜`-O3`）で通っている。CI の MSVC と x86 もこれで確かめる。
+
+**参照実装と違えたところ**。
+
+- グループやマスクのキャンバスは参照カウントで持つ。Go は GC とキャンバスの再利用プールに任せているので、壊れた命令列（マスクの中で始めたグループを残したままマスクを終える）では、終わったマスクのキャンバスに描き続け、そのキャンバスが別のグループに貸し出されることがある。libbdf では終わったキャンバスへの描画はどこにも出ない。well-formed な命令列では同じ絵になる。
+- キャンバスの再利用プール（`Renderer.free`）と、絵を変えない近道を使わない描き方（`plain`）は持たない。前者は速度だけの話で、必要になったら足す。
+- 警告の文面は英語で、Go とほぼ同じだが一字一句は合わせていない。
+
+**上限**は Go と同じ値: 画像 64M 画素、パスの点 2^20、スキャンの仕事量 2^24、線の輪郭点と破線 2^20、グループとマスク 64 段、状態 1024、開いているキャンバスとクリップのメモリ（画像 8 枚分か 64 MiB）、描き直す命令 2^24、影のぼかし 1024 px。最後の 2 つは `BDF_MAX_REUSED_DRAWN`、`BDF_MAX_SHADOW_BLUR` でビルド時に下げられる（fuzz のビルドは 65536 と 16）。ぼかし 1024 px の影は 1 回の描画で 1,000 万要素を 3 回なめるので、影つきの描画を数万個並べた文書は参照実装でも libbdf でも時間がかかる。これは bdf 側の課題として残る。
+
+**まだ描かないもの**。テキスト（`FILL_TEXT`、`STROKE_TEXT`）、画像（`IMAGE`、`IMAGE_SUB`、パターン）、SVG 画像、`FILTER`。出会うと警告を 1 度出して飛ばす。testdata の 249 ページのうち 213 ページがこれらを使うので、実用にはこの先が要る。
 

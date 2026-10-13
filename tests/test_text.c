@@ -887,52 +887,6 @@ static void test_cues(void) {
 
 /* ---- Documents ---------------------------------------------------------- */
 
-/* docb assembles the parts of a single-file document. */
-typedef struct docb {
-  wr parts, entries;
-} docb;
-
-/* part_name writes the 32-digit name of part id, the name ob_child refers to. */
-static void part_name(uint32_t id, char out[33]) { snprintf(out, 33, "%08x000000000000000000000000", id); }
-
-static void docb_add(docb *d, uint32_t id, const char *type, wr *data) {
-  char name[33], e[256];
-  part_name(id, name);
-  snprintf(e, sizeof e, "%s{\"h\":\"%s\",\"t\":\"%s\",\"enc\":\"identity\",\"len\":%zu,\"size\":%zu,\"off\":%zu}",
-           d->entries.n ? "," : "", name, type, data->n, data->n, d->parts.n);
-  w_text(&d->entries, e);
-  w_bytes(&d->parts, data->b, data->n);
-  free(data->b);
-  data->b = NULL;
-}
-
-static void docb_object(docb *d, uint32_t id, ob *o) {
-  wr w = ob_encode(o);
-  docb_add(d, id, "obj", &w);
-}
-
-/* docb_open closes the manifest around views (a JSON array) and opens it. */
-static bdf_doc *docb_open(docb *d, const char *views, wr *keep) {
-  wr m = {0};
-  w_text(&m, "{\"bdf\":1,\"opset\":1,\"views\":");
-  w_text(&m, views);
-  w_text(&m, ",\"parts\":[");
-  w_bytes(&m, d->entries.b, d->entries.n);
-  w_text(&m, "]}");
-  w_u8(&m, 0);
-  *keep = single((const char *)m.b, d->parts.b, d->parts.n);
-  free(m.b);
-  free(d->parts.b);
-  free(d->entries.b);
-  bdf_doc *doc = NULL;
-  bdf_error err;
-  if (bdf_doc_open_memory(keep->b, keep->n, &doc, &err) != BDF_OK) {
-    failures++;
-    fprintf(stderr, "docb_open: %s\n", err.message);
-  }
-  return doc;
-}
-
 static void expect_index(const bdf_text_index *idx, const char *want, int line) {
   char got[1024] = "";
   size_t k = 0;
