@@ -76,6 +76,28 @@ public class BdfTests
     }
 
     [Fact]
+    public void FontFiles()
+    {
+        using var fonts = new BdfFonts();
+        string dir = Path.Combine(Path.GetTempPath(), "bdf-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            Assert.Throws<FileNotFoundException>(() => fonts.AddFile(Path.Combine(dir, "none.ttf")));
+            // a path that is not ASCII is opened: what is wrong is what is in the file
+            string path = Path.Combine(dir, "\u65e5\u672c\u8a9e-\u00e9.ttf");
+            File.WriteAllBytes(path, "not a font"u8.ToArray());
+            var refused = Assert.Throws<BdfException>(() => fonts.AddFile(path));
+            Assert.DoesNotContain("cannot be opened", refused.Message);
+            Assert.Equal(0, fonts.Count);
+        }
+        finally
+        {
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [Fact]
     public void SkiaSharp()
     {
         using var doc = Sample();

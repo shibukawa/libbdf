@@ -93,12 +93,68 @@ typedef struct bdfi_fdb_src {
   FILE *fp;
 } bdfi_fdb_src;
 
-/* Opens a font file for reading. (Microsoft's compiler takes fopen for a
- * mistake; the path is in the encoding of the C library either way.) */
+#ifdef _WIN32
+/*
+ * A path as Windows takes one, UTF-16, for a path in UTF-8, in memory of
+ * its own. NULL for bytes that are not UTF-8, and when there is no memory.
+ */
+static wchar_t *bdfi_fdb_wide(const char *path) {
+  size_t n = strlen(path), k = 0;
+  /* (a character of UTF-8 is never fewer bytes than it is units of UTF-16) */
+  wchar_t *w = bdfi_malloc_array(n + 1, sizeof *w);
+  if (!w) {
+    return NULL;
+  }
+  for (size_t i = 0; i < n;) {
+    size_t len;
+    uint32_t c = bdfi_utf8_next(path, n, i, &len);
+    if (c == 0xfffd && !(len == 3 && memcmp(path + i, "\xef\xbf\xbd", 3) == 0)) {
+      free(w);
+      return NULL; /* put there for bytes that are no character */
+    }
+    if (c >= 0x10000) {
+      w[k++] = (wchar_t)(0xd800 + ((c - 0x10000) >> 10));
+      w[k++] = (wchar_t)(0xdc00 + ((c - 0x10000) & 0x3ff));
+    } else {
+      w[k++] = (wchar_t)c;
+    }
+    i += len;
+  }
+  w[k] = 0;
+  return w;
+}
+#endif
+
+/*
+ * Opens a font file for reading. The path is UTF-8, on Windows as
+ * elsewhere: there the C library would take it in the code page of the
+ * system, in which most paths cannot be written. A path that is not UTF-8,
+ * or that names no file as UTF-8, is tried the C library's way after that,
+ * for the callers that have one from it. (Microsoft's compiler takes fopen
+ * and _wfopen for mistakes.)
+ */
 static FILE *bdfi_fdb_open(const char *path) {
-#ifdef _MSC_VER
+#ifdef _WIN32
   FILE *fp = NULL;
+  wchar_t *wide = bdfi_fdb_wide(path);
+  if (wide) {
+#ifdef _MSC_VER
+    if (_wfopen_s(&fp, wide, L"rb") != 0) {
+      fp = NULL;
+    }
+#else
+    fp = _wfopen(wide, L"rb");
+#endif
+    free(wide);
+    if (fp) {
+      return fp;
+    }
+  }
+#ifdef _MSC_VER
   return fopen_s(&fp, path, "rb") == 0 ? fp : NULL;
+#else
+  return fopen(path, "rb");
+#endif
 #else
   return fopen(path, "rb");
 #endif
