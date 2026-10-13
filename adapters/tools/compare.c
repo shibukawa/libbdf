@@ -450,6 +450,24 @@ static void page_text(ob *o) {
   ob_text(o, "AAB", 32, 60, 50);
 }
 
+/* An SVG image: a canvas is given a raster of it, as large as it is shown. */
+static const char svg_image[] =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"32\" height=\"32\" viewBox=\"0 0 16 16\">"
+    "<defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#f60\"/>"
+    "<stop offset=\"1\" stop-color=\"#06f\"/></linearGradient></defs>"
+    "<rect width=\"16\" height=\"16\" rx=\"3\" fill=\"url(#g)\"/>"
+    "<circle cx=\"8\" cy=\"8\" r=\"4\" fill=\"#fff\" opacity=\".7\"/>"
+    "<path d=\"M3 13L8 3l5 10z\" fill=\"none\" stroke=\"#000\"/></svg>";
+
+static void page_svg(ob *o) {
+  size_t im = ob_image(o, 3);
+  const float half[4] = {0, 0, 16, 32};
+  ob_draw_image(o, im, 4, 4, 32, 32);
+  ob_draw_image_sub(o, im, half, 40, 4, 20, 40);
+  op_paint(o, BDF_OP_FILL_PAINT, add_pattern(o, im, BDF_REPEAT, 0.5f, 4, 44));
+  ob_rect(o, BDF_OP_FILL_RECT, 4, 44, 32, 16);
+}
+
 /* Shadows that are not blurred: every library blurs in its own way. */
 static void page_shadows(ob *o) {
   static const uint8_t zig[] = {BDF_VERB_MOVE, BDF_VERB_LINE, BDF_VERB_LINE};
@@ -467,8 +485,8 @@ static void page_shadows(ob *o) {
 }
 
 static bdf_doc *builtin_pages(unsigned flags, wr *keep) {
-  void (*const pages[])(ob *) = {page_shapes, page_lines, page_gradients, page_images,
-                                 page_groups, page_masks, page_text,      page_shadows};
+  void (*const pages[])(ob *) = {page_shapes, page_lines, page_gradients, page_images, page_groups,
+                                 page_masks,  page_text,  page_svg,       page_shadows};
   size_t n = sizeof pages / sizeof pages[0];
   if (flags & BDF_COMPARE_NO_SHADOWS) {
     n--;
@@ -479,6 +497,9 @@ static bdf_doc *builtin_pages(unsigned flags, wr *keep) {
   docb_add(&d, 1, "img", &image);
   w_bytes(&font, rv_font_boxes, sizeof rv_font_boxes);
   docb_add(&d, 2, "font", &font);
+  wr svg = {0};
+  w_bytes(&svg, svg_image, sizeof svg_image - 1);
+  docb_add(&d, 3, "img", &svg);
   char views[4096], name[33];
   size_t at = (size_t)snprintf(views, sizeof views, "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":[");
   for (size_t i = 0; i < n; i++) {

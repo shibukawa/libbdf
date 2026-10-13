@@ -650,9 +650,65 @@ static void test_text(void) {
   free(keep.b);
 }
 
+/* An SVG image comes as a raster of it, as large as it is shown: one for
+ * each scale, kept by its id. */
+static void test_svg_images(void) {
+  static const char stripes[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+                                "<rect width=\"1\" height=\"2\" fill=\"#f00\"/></svg>";
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  rec r = {0};
+  add_part(&d, 1, "img", stripes, sizeof stripes - 1);
+  ob a = {0};
+  size_t im = ob_image(&a, 1);
+  ob_draw_image(&a, im, 0, 0, 8, 8);
+  ob_fill_paint(&a, ob_pattern(&a, im, BDF_REPEAT, 1, 0, 0));
+  ob_rect(&a, BDF_OP_FILL_RECT, 0, 8, 8, 4);
+  docb_object(&d, 20, &a);
+  bdf_doc *doc = pages_of(&d, 20, 1, 8, 12, &keep);
+  bdf_renderer *rn = NULL;
+  CHECK(bdf_renderer_new(doc, NULL, &rn, &err) == BDF_OK);
+  bdf_canvas c = rec_canvas(&r, 0);
+  CHECK(bdf_play_page(rn, 0, 0, 1, &c, &err) == BDF_OK);
+  /* drawn four times its size: a raster of 8 by 8, of which a unit of the
+   * image is four pixels; as a pattern at its own size, one of 2 by 2 */
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L8,0 L8,12 L0,12 Z\n"
+               "save\n"
+               "save\n"
+               "transform 1 0 0 1 0 0\n"
+               "image bitmap#1 8x8 ff0000ff 0,0,8,8 to 0,0,8,8 smooth\n"
+               "restore\n"
+               "fill M0,8 L8,8 L8,12 L0,12 Z with pattern(bitmap#2 2x2 ff0000ff repeat=0 [1 0 0 1 0 0])\n"
+               "restore\n"
+               "restore\n"));
+  /* at twice the scale the rasters are twice as large, and others */
+  c = rec_canvas(&r, 0);
+  CHECK(bdf_play_page(rn, 0, 0, 2, &c, &err) == BDF_OK);
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L8,0 L8,12 L0,12 Z\n"
+               "save\n"
+               "save\n"
+               "transform 0.5 0 0 0.5 0 0\n"
+               "image bitmap#1 16x16 ff0000ff 0,0,16,16 to 0,0,16,16 smooth\n"
+               "restore\n"
+               "fill M0,8 L8,8 L8,12 L0,12 Z with pattern(bitmap#2 4x4 ff0000ff repeat=0 [0.5 0 0 0.5 0 0])\n"
+               "restore\n"
+               "restore\n"));
+  CHECK(bdf_renderer_warning_count(rn) == 0);
+  free(r.s);
+  bdf_renderer_free(rn);
+  bdf_doc_free(doc);
+  free(keep.b);
+}
+
 int main(void) {
   test_shapes();
   test_images_and_layers();
   test_text();
+  test_svg_images();
   return finish();
 }

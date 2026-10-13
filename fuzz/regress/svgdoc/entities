@@ -1,0 +1,1 @@
+<!DOCTYPE svg [<!ENTITY a "x&amp;y"><!ENTITY b "&a;&a;">]><svg><g a="&b;&#0;&#xD800;&#X41;&nbsp;">&b;</g></svg>

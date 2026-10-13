@@ -81,6 +81,7 @@ static void bdfi_robj_clear(bdfi_robj *o) {
   bdf_paths_free(o->coll);
   bdf_free(o->coll_data);
   bdfi_face_free(o->font);
+  bdfi_svg_image_free(o->svg);
   bdf_object_free(o->owned);
   memset(o, 0, sizeof *o);
 }
@@ -202,7 +203,7 @@ bdfi_robj *bdfi_r_object(struct bdf_renderer *r, const uint8_t hash[16]) {
  * first (nothing drawn before refers to them still). It reports whether
  * there is room.
  */
-static int bdfi_r_make_room(struct bdf_renderer *r, int64_t n) {
+int bdfi_r_make_room(struct bdf_renderer *r, int64_t n) {
   if (n > r->room) {
     return 0;
   }
@@ -218,14 +219,78 @@ static int bdfi_r_make_room(struct bdf_renderer *r, int64_t n) {
       return 0;
     }
     bdfi_picture *p = r->kept[oldest];
-    r->parts[p->part].pic = NULL;
-    r->parts[p->part].pic_state = 0;
+    if (p->owner) {
+      *p->owner = NULL;
+    }
+    if (p->owner_flag) {
+      *p->owner_flag = 0;
+    }
     r->pixels -= (int64_t)p->w * p->h;
     memmove(r->kept + oldest, r->kept + oldest + 1, (r->nkept - oldest - 1) * sizeof *r->kept);
     r->nkept--;
     bdfi_picture_free(p);
   }
   return 1;
+}
+
+int bdfi_r_keep(struct bdf_renderer *r, bdfi_picture *p, bdfi_picture **owner, uint8_t *flag) {
+  if (r->nkept == r->cap_kept) {
+    size_t cap = r->cap_kept ? 2 * r->cap_kept : 8;
+    bdfi_picture **kept = bdfi_realloc_array(r->kept, cap, sizeof *kept);
+    if (!kept) {
+      r->oom = 1;
+      return 0;
+    }
+    r->kept = kept;
+    r->cap_kept = cap;
+  }
+  p->used = r->drawing;
+  p->owner = owner;
+  p->owner_flag = flag;
+  p->serial = ++r->pictures;
+  r->kept[r->nkept++] = p;
+  r->pixels += (int64_t)p->w * p->h;
+  return 1;
+}
+
+bdfi_picture *bdfi_r_decode(struct bdf_renderer *r, const uint8_t *data, size_t len,
+                            bdfi_picture **owner, uint8_t *flag, int *full) {
+  *full = 0;
+  /* an image whose size can be read makes room for itself before it is
+   * decoded; one there is no room for while this image is drawn may find
+   * some in the next */
+  int32_t w, h;
+  if (bdfi_image_config(data, len, &w, &h) && w > 0 && h > 0 &&
+      (int64_t)w * h <= BDFI_MAX_DECODE_PIXELS && !bdfi_r_make_room(r, (int64_t)w * h)) {
+    bdfi_r_warnf(r, BDFI_TOO_MANY_PIXELS, (long long)r->room);
+    *full = 1;
+    return NULL;
+  }
+  bdfi_picture *p = NULL;
+  int format = BDFI_IMAGE_NONE;
+  bdf_status st = bdfi_picture_decode(data, len, &p, &format);
+  if (st == BDF_OK && !bdfi_r_keep(r, p, owner, flag)) {
+    bdfi_picture_free(p);
+    return NULL;
+  }
+  if (st == BDF_ERR_NOMEM) {
+    r->oom = 1;
+    return NULL;
+  }
+  if (st == BDF_ERR_TOO_LARGE) {
+    bdfi_r_warnf(r, "an image of more than %lld pixels is not drawn",
+                 (long long)BDFI_MAX_DECODE_PIXELS);
+    return NULL;
+  }
+  if (st != BDF_OK) {
+    if (format == BDFI_IMAGE_AVIF) {
+      bdfi_r_warn(r, "AVIF images are not drawn");
+    } else {
+      bdfi_r_warnf(r, "an image (%s) cannot be decoded", bdfi_image_name(format));
+    }
+    return NULL;
+  }
+  return p;
 }
 
 bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
@@ -245,7 +310,6 @@ bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
     return o->pic;
   }
   o->pic_state = 2;
-  size_t part = (size_t)(o - r->parts);
   uint8_t *data = NULL;
   size_t len = 0;
   bdf_error e;
@@ -261,65 +325,44 @@ bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]) {
     return NULL;
   }
   if (bdfi_image_is_svg(data, len)) {
+    /* an SVG image is no picture: its rasters are (bdfi_r_svg) */
+    bdfi_svg_image *si = bdfi_svg_image_new(data, len, &st);
     bdf_free(data);
-    bdfi_r_warn(r, "SVG images are not drawn");
+    if (!si) {
+      if (st == BDF_ERR_NOMEM) {
+        r->oom = 1;
+        o->pic_state = 0;
+      } else {
+        bdfi_r_warn(r, "an SVG image cannot be read");
+      }
+      return NULL;
+    }
+    const char *const *warnings;
+    size_t n = bdfi_svg_image_warnings(si, &warnings);
+    for (size_t i = 0; i < n; i++) {
+      bdfi_r_warnf(r, "%s", warnings[i]);
+    }
+    o->svg = si;
     return NULL;
   }
-  /* an image whose size can be read makes room for itself before it is
-   * decoded; one there is no room for while this image is drawn may find
-   * some in the next */
-  int32_t w, h;
-  if (bdfi_image_config(data, len, &w, &h) && w > 0 && h > 0 &&
-      (int64_t)w * h <= BDFI_MAX_DECODE_PIXELS && !bdfi_r_make_room(r, (int64_t)w * h)) {
-    bdf_free(data);
-    bdfi_r_warnf(r,
-                 "the images of a page have more than %lld pixels in all: the rest of them is not "
-                 "drawn",
-                 (long long)r->room);
-    o->pic_state = 0;
-    return NULL;
-  }
-  bdfi_picture *p = NULL;
-  int format = BDFI_IMAGE_NONE;
-  st = bdfi_picture_decode(data, len, &p, &format);
+  int full;
+  bdfi_picture *p = bdfi_r_decode(r, data, len, &o->pic, &o->pic_state, &full);
   bdf_free(data);
-  if (st == BDF_OK && r->nkept == r->cap_kept) {
-    size_t cap = r->cap_kept ? 2 * r->cap_kept : 8;
-    bdfi_picture **kept = bdfi_realloc_array(r->kept, cap, sizeof *kept);
-    if (kept) {
-      r->kept = kept;
-      r->cap_kept = cap;
-    } else {
-      bdfi_picture_free(p);
-      st = BDF_ERR_NOMEM;
-    }
-  }
-  if (st == BDF_ERR_NOMEM) {
-    r->oom = 1;
-    o->pic_state = 0;
-    return NULL;
-  }
-  if (st == BDF_ERR_TOO_LARGE) {
-    bdfi_r_warnf(r, "an image of more than %lld pixels is not drawn",
-                 (long long)BDFI_MAX_DECODE_PIXELS);
-    return NULL;
-  }
-  if (st != BDF_OK) {
-    if (format == BDFI_IMAGE_AVIF) {
-      bdfi_r_warn(r, "AVIF images are not drawn");
-    } else {
-      bdfi_r_warnf(r, "an image (%s) cannot be decoded", bdfi_image_name(format));
+  if (!p) {
+    if (full || r->oom) {
+      o->pic_state = 0; /* there may be room for it in the next image drawn */
     }
     return NULL;
   }
-  p->used = r->drawing;
-  p->part = part;
-  p->serial = ++r->pictures;
-  r->kept[r->nkept++] = p;
-  r->pixels += (int64_t)p->w * p->h;
   o->pic = p;
   o->pic_state = 1;
   return p;
+}
+
+bdfi_svg_image *bdfi_r_svg(struct bdf_renderer *r, const uint8_t hash[16]) {
+  bdfi_r_picture(r, hash);
+  bdfi_robj *o = bdfi_r_part_slot(r, hash);
+  return o ? o->svg : NULL;
 }
 
 /* The paths of a path collection part, or NULL. */
