@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.21)
+project(bdf_test_package C)
+find_package(bdf CONFIG REQUIRED)
+add_executable(consumer ../../consumer/main.c)
+target_link_libraries(consumer PRIVATE bdf::bdf)

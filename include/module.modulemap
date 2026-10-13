@@ -1,0 +1,7 @@
+// The module of the C library for Swift and Objective-C: its one header.
+// (The headers of the adapters, beside it, need the libraries they draw
+// with, and are not part of it.)
+module CBDF {
+    header "bdf/bdf.h"
+    export *
+}

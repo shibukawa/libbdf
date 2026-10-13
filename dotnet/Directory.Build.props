@@ -1,0 +1,18 @@
+<Project>
+  <!-- What the projects of libbdf for .NET share. The release workflow gives
+       the version of the library (-p:Version=...). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>0.8.0</Version>
+    <Authors>Yoshiki Shibukawa</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/shibukawa/libbdf</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/shibukawa/libbdf</RepositoryUrl>
+    <PackageTags>bdf;document;viewer;renderer</PackageTags>
+  </PropertyGroup>
+</Project>

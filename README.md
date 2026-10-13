@@ -55,6 +55,10 @@ Some limits can be lowered when compiling the library (`-DBDF_MAX_KDF_ITERATIONS
 
 Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg-config bdf`, or with `FetchContent` on this repository. An adapter that was built is `bdf::cairo`, `bdf::coregraphics`, `bdf::qt` or `bdf::skia` there (and `pkg-config bdf-cairo`); or take its two files into a build of your own, beside the library or the single header.
 
+### Packages
+
+Beside CMake and pkg-config the repository has what other build systems and languages take ([packaging/README.md](packaging/README.md) has the table): a Swift package (`Package.swift`: `BDF`, a small Swift layer that opens a document and draws its pages on a `CGContext`, over `CBDF` and `CBDFCoreGraphics`), a script for an xcframework, a Conan 2 recipe (`conanfile.py`), a vcpkg overlay port and a Meson wrap (`packaging/`), and libbdf for .NET (`dotnet/`: the bindings `LibBdf`, and `LibBdf.SkiaSharp`, which draws pages on an `SKCanvas`, for .NET MAUI and the like). A tag `v<version>` makes a draft release with the single header, binaries for Linux, macOS and Windows, the xcframework and the NuGet packages (`.github/workflows/release.yml`). Nothing is published to a registry yet.
+
 ### The single header
 
 `tools/amalgamate.py` joins the sources into one `bdf.h` (the `bdf_single_header` target writes it to `build/single/bdf/bdf.h`; CI publishes it as an artifact). Include it anywhere for the declarations; define `BDF_IMPLEMENTATION` in exactly one C translation unit before including it to get the library, and `BDF_STATIC` as well to keep it out of the link namespace. The implementation is C11, so a C++ project compiles it in a `.c` file of its own. The single header carries no Brotli decoder: define `BDF_HAVE_BROTLI` and link libbrotlidec (or compile `third_party/brotli` alongside) to decode WOFF2 fonts; without it they are `BDF_ERR_UNSUPPORTED`. The unit tests run against the single header too, with the library's warnings as errors.

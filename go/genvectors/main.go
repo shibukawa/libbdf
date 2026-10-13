@@ -5,9 +5,12 @@
 // drawings with what the reference's renderer makes of them
 // (tests/render_vectors.h).
 //
-//	go run -C go ./genvectors ../tests [unlock] [crypto] [render]
+//	go run -C go ./genvectors ../tests [unlock] [crypto] [render] [sample]
 //
-// Without names it writes them all. The documents of unlock are sealed with
+// Without names it writes the three kinds of vectors. sample writes
+// samples/two-pages.bdf beside the tests directory instead: a small document
+// made here, for the tests of the packages (Swift, .NET) and for trying
+// things out. The documents of unlock are sealed with
 // fresh random salts and nonces, so its bytes differ from run to run. The
 // pictures of render are those of the reference where it computes without
 // fused multiply-adds, which libbdf draws on every platform: write them with
@@ -585,9 +588,39 @@ func renderVectors(path string) {
 	o.write(path, "random drawings and random documents with the pictures the\n * reference's raster/imagebdf makes of them (on amd64, where it computes as libbdf does), as hashes\n * (FNV-1a, 64 bits) of their premultiplied RGBA pixels.")
 }
 
+// sampleDocument writes a document of two pages, 100 by 80: on the first a
+// red rectangle from (10, 10) to (40, 30) and a blue one at half its alpha
+// from (30, 20) to (60, 50); on the second a green circle around (50, 40).
+func sampleDocument(path string) {
+	doc := bdf.NewDocument()
+	one := bdf.NewObject()
+	one.FillColor(0xff0000ff).FillRect(10, 10, 30, 20)
+	one.FillColor(0x0000ff80).FillRect(30, 20, 30, 30)
+	one.SetBBox(0, 0, 100, 80)
+	two := bdf.NewObject()
+	circle := two.AddPath(&bdf.Path{Verbs: []byte{bdf.VerbEllipse}, Args: []float32{50, 40, 25, 25, 0, 0, 6.2831855, 0}})
+	two.FillColor(0x00a000ff).FillPath(circle, bdf.NonZero)
+	two.SetBBox(0, 0, 100, 80)
+	view := doc.NewView("pages", bdf.ViewFixed, "Pages")
+	for _, o := range []*bdf.Object{one, two} {
+		h, _ := doc.AddObject(o)
+		view.AddPage(100, 80, bdf.Layer{Role: bdf.RoleBody, Obj: h})
+	}
+	var file bytes.Buffer
+	if err := doc.WriteSingle(&file); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.WriteFile(path, file.Bytes(), 0o644); err != nil {
+		log.Fatal(err)
+	}
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: genvectors <tests directory> [unlock] [crypto] [render]")
+		log.Fatal("usage: genvectors <tests directory> [unlock] [crypto] [render] [sample]")
 	}
 	which := os.Args[2:]
 	if len(which) == 0 {
@@ -601,6 +634,8 @@ func main() {
 			cryptoVectors(filepath.Join(os.Args[1], "crypto_vectors.h"))
 		case "render":
 			renderVectors(filepath.Join(os.Args[1], "render_vectors.h"))
+		case "sample":
+			sampleDocument(filepath.Join(os.Args[1], "..", "samples", "two-pages.bdf"))
 		default:
 			log.Fatalf("no vectors named %q", name)
 		}

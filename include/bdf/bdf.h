@@ -44,9 +44,9 @@ extern "C" {
 #endif
 
 #define BDF_VERSION_MAJOR  0
-#define BDF_VERSION_MINOR  7
+#define BDF_VERSION_MINOR  8
 #define BDF_VERSION_PATCH  0
-#define BDF_VERSION_STRING "0.7.0"
+#define BDF_VERSION_STRING "0.8.0"
 
 /* The wire format version and the instruction set (opset) this library reads. */
 #define BDF_FORMAT_VERSION 1

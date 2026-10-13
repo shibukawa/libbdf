@@ -1,0 +1,15 @@
+# A Meson wrap of libbdf: put this file in subprojects/ of a Meson project,
+# and
+#
+#   bdf_dep = dependency('bdf')
+#
+# is the library where it is installed (through pkg-config or its CMake
+# package), and otherwise a build of it from this repository, by CMake.
+[wrap-git]
+url = https://github.com/shibukawa/libbdf.git
+revision = v0.8.0
+depth = 1
+method = cmake
+
+[provide]
+bdf = bdf_dep

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(bdf
-  VERSION 0.7.0
+  VERSION 0.8.0
   DESCRIPTION "A C reader for BDF (Browser-specific Document Format) documents"
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
@@ -204,6 +204,13 @@ if(BDF_INSTALL)
     ${CMAKE_CURRENT_BINARY_DIR}/bdfConfig.cmake
     ${CMAKE_CURRENT_BINARY_DIR}/bdfConfigVersion.cmake
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/bdf)
+  # The prefix of the pkg-config files is where they are found, so that an
+  # installed tree can be moved (and installed with --prefix).
+  # (from a place that is a full path on every system: only what is
+  # relative of it is kept)
+  set(BDF_PC_ROOT "${CMAKE_CURRENT_BINARY_DIR}/prefix")
+  file(RELATIVE_PATH BDF_PC_PREFIX "${BDF_PC_ROOT}/${CMAKE_INSTALL_LIBDIR}/pkgconfig" "${BDF_PC_ROOT}")
+  string(REGEX REPLACE "/+$" "" BDF_PC_PREFIX "${BDF_PC_PREFIX}")
   configure_file(cmake/bdf.pc.in ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc @ONLY)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/bdf.pc
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

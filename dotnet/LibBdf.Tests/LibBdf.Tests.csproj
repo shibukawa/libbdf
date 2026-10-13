@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Skia itself, for the system the tests run on in the CI -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
+    <ProjectReference Include="../LibBdf/LibBdf.csproj" />
+    <ProjectReference Include="../LibBdf.SkiaSharp/LibBdf.SkiaSharp.csproj" />
+    <None Include="../../samples/two-pages.bdf" Link="two-pages.bdf" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>LibBdf</RootNamespace>
+    <PackageId>LibBdf</PackageId>
+    <Description>BDF (Browser-specific Document Format) documents in .NET: libbdf, the C reader and renderer, and what opens a document and draws its pages with it.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The native library of each platform, where the release workflow
+         puts it: runtimes/<rid>/native/. Without them the library is found
+         as the system finds libraries (PATH, LD_LIBRARY_PATH, ...). -->
+    <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" />
+  </ItemGroup>
+</Project>
