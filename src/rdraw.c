@@ -11,8 +11,7 @@
 
 static const char bdfi_too_much_memory[] =
     "the groups and clips of a page take too much memory: what is in the rest of them is not drawn";
-static const char bdfi_stroke_cut[] =
-    "a line has too many dashes, joins and caps: the rest of it is not drawn";
+static const char bdfi_stroke_cut[] = BDFI_STROKE_CUT;
 
 /* ---- States -------------------------------------------------------------- */
 
@@ -156,7 +155,26 @@ static void bdfi_draw_shader(bdfi_drawer *d, const bdfi_style *s, const bdfi_mat
   out->solid = bdfi_solid_of(0, 0, 0, 0);
   if (s->paint.kind == BDF_PAINT_PATTERN) {
     bdfi_pattern_shader p;
-    if (bdfi_pattern_shader_init(&p, &s->paint, s->image, m, &d->r->oom)) {
+    bdfi_picture *img = s->image;
+    double kx = 1, ky = 1;
+    if (s->svg) {
+      /* an SVG cell as large as it is drawn. (Without room for its raster
+       * the reference gives the whole page up; here the pattern paints
+       * nothing.) */
+      const float *pm = s->paint.matrix;
+      bdfi_mat pattern = {{(double)pm[0], (double)pm[1], (double)pm[2], (double)pm[3],
+                           (double)pm[4], (double)pm[5]}};
+      bdfi_mat full = bdfi_mat_mul2(*m, pattern);
+      double scale, w, h;
+      img = bdfi_svg_image_raster(d->r, s->svg, bdfi_mat_max_scale(&full), &scale);
+      if (!img) {
+        return;
+      }
+      bdfi_svg_image_size(s->svg, &w, &h);
+      kx = w / (double)img->w;
+      ky = h / (double)img->h;
+    }
+    if (bdfi_pattern_shader_init(&p, &s->paint, img, m, kx, ky, &d->r->oom)) {
       out->pattern = p;
     }
     return;
@@ -180,7 +198,11 @@ static bdfi_style bdfi_paint_style(bdfi_drawer *d, uint64_t i) {
   s.owner = d->obj;
   s.index = (size_t)i;
   if (s.paint.kind == BDF_PAINT_PATTERN && s.paint.image < bdf_object_image_count(d->obj->obj)) {
-    s.image = bdfi_r_picture(d->r, bdf_object_image(d->obj->obj, (size_t)s.paint.image));
+    const uint8_t *hash = bdf_object_image(d->obj->obj, (size_t)s.paint.image);
+    s.image = bdfi_r_picture(d->r, hash);
+    if (!s.image) {
+      s.svg = bdfi_r_svg(d->r, hash);
+    }
   }
   return s;
 }
@@ -407,12 +429,22 @@ static void bdfi_draw_image(bdfi_drawer *d, uint64_t i, const double *src, doubl
     bdfi_mask_unref(cov);
     return; /* it shows nowhere: not worth decoding */
   }
-  bdfi_picture *pic = bdfi_r_picture(d->r, bdf_object_image(d->obj->obj, (size_t)i));
-  if (!pic || w == 0 || h == 0) {
+  const uint8_t *hash = bdf_object_image(d->obj->obj, (size_t)i);
+  bdfi_picture *pic = bdfi_r_picture(d->r, hash);
+  bdfi_svg_image *si = bdfi_r_svg(d->r, hash);
+  if ((!pic && !si) || w == 0 || h == 0) {
     bdfi_mask_unref(cov);
     return;
   }
-  double sx = 0, sy = 0, sw = (double)pic->w, sh = (double)pic->h;
+  /* the source rectangle is in image pixels: an SVG image's natural size */
+  double nw, nh;
+  if (pic) {
+    nw = (double)pic->w;
+    nh = (double)pic->h;
+  } else {
+    bdfi_svg_image_size(si, &nw, &nh);
+  }
+  double sx = 0, sy = 0, sw = nw, sh = nh;
   if (src) {
     sx = src[0];
     sy = src[1];
@@ -422,6 +454,21 @@ static void bdfi_draw_image(bdfi_drawer *d, uint64_t i, const double *src, doubl
       bdfi_mask_unref(cov);
       return;
     }
+  }
+  if (!pic) {
+    /* drawn as sharp as it is shown: a raster at the device scale */
+    double k;
+    pic = bdfi_svg_image_raster(
+        d->r, si, bdfi_mat_max_scale(&st->m) * bdfi_fmax(fabs(w / sw), fabs(h / sh)), &k);
+    if (!pic) {
+      bdfi_mask_unref(cov);
+      return;
+    }
+    double ky = (double)pic->h / nh;
+    sx = sx * k;
+    sy = sy * ky;
+    sw = sw * k;
+    sh = sh * ky;
   }
   /* device to image pixels: the inverse of (m x destination from source) */
   bdfi_mat place = {{w / sw, 0, 0, h / sh, x - sx * w / sw, y - sy * h / sh}};

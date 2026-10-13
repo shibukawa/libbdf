@@ -211,15 +211,31 @@ static void bdfi_player_style(const bdfi_player *p, const bdfi_style *s, bdf_can
   if (s->paint.kind == BDF_PAINT_PATTERN) {
     /* a pattern of no image paints nothing, as the rasterizer has it */
     out->color = 0;
-    if (!s->image) {
+    const bdfi_picture *img = s->image;
+    double kx = 1, ky = 1;
+    if (!img && s->svg) {
+      /* an SVG cell, drawn as large as it is shown: its raster is the image */
+      const float *pm = s->paint.matrix;
+      bdfi_mat pattern = {{(double)pm[0], (double)pm[1], (double)pm[2], (double)pm[3],
+                           (double)pm[4], (double)pm[5]}};
+      bdfi_mat full = bdfi_mat_mul2(st->m, pattern);
+      double scale, w, h;
+      img = bdfi_svg_image_raster(p->r, s->svg, bdfi_mat_max_scale(&full) * p->scale, &scale);
+      if (img) {
+        bdfi_svg_image_size(s->svg, &w, &h);
+        kx = w / (double)img->w;
+        ky = h / (double)img->h;
+      }
+    }
+    if (!img) {
       out->paint = NULL;
       return;
     }
-    *image = bdfi_player_bitmap(s->image);
+    *image = bdfi_player_bitmap(img);
     paint->image = image;
     paint->repeat = s->paint.repeat;
     for (int i = 0; i < 6; i++) {
-      paint->matrix[i] = (double)s->paint.matrix[i];
+      paint->matrix[i] = (double)s->paint.matrix[i] * (i < 2 ? kx : i < 4 ? ky : 1);
     }
     return;
   }
@@ -263,7 +279,11 @@ static bdfi_style bdfi_player_paint_style(bdfi_player *p, uint64_t i) {
   s.owner = p->obj;
   s.index = (size_t)i;
   if (s.paint.kind == BDF_PAINT_PATTERN && s.paint.image < bdf_object_image_count(p->obj->obj)) {
-    s.image = bdfi_r_picture(p->r, bdf_object_image(p->obj->obj, (size_t)s.paint.image));
+    const uint8_t *hash = bdf_object_image(p->obj->obj, (size_t)s.paint.image);
+    s.image = bdfi_r_picture(p->r, hash);
+    if (!s.image) {
+      s.svg = bdfi_r_svg(p->r, hash);
+    }
   }
   return s;
 }
@@ -319,11 +339,21 @@ static void bdfi_player_image(bdfi_player *p, uint64_t i, const double *src, dou
     bdfi_r_warn(p->r, "bad image reference");
     return;
   }
-  bdfi_picture *pic = bdfi_r_picture(p->r, bdf_object_image(p->obj->obj, (size_t)i));
-  if (!pic || w == 0 || h == 0) {
+  const uint8_t *hash = bdf_object_image(p->obj->obj, (size_t)i);
+  bdfi_picture *pic = bdfi_r_picture(p->r, hash);
+  bdfi_svg_image *si = bdfi_r_svg(p->r, hash);
+  if ((!pic && !si) || w == 0 || h == 0) {
     return;
   }
-  double sx = 0, sy = 0, sw = (double)pic->w, sh = (double)pic->h;
+  /* the source rectangle is in image pixels: an SVG image's natural size */
+  double nw, nh;
+  if (pic) {
+    nw = (double)pic->w;
+    nh = (double)pic->h;
+  } else {
+    bdfi_svg_image_size(si, &nw, &nh);
+  }
+  double sx = 0, sy = 0, sw = nw, sh = nh;
   if (src) {
     sx = src[0];
     sy = src[1];
@@ -332,6 +362,22 @@ static void bdfi_player_image(bdfi_player *p, uint64_t i, const double *src, dou
     if (sw == 0 || sh == 0) {
       return;
     }
+  }
+  if (!pic) {
+    /* an SVG image comes as a raster of it, as sharp as it is shown */
+    double k;
+    pic = bdfi_svg_image_raster(p->r, si,
+                                bdfi_mat_max_scale(&p->st.m) * p->scale *
+                                    bdfi_fmax(fabs(w / sw), fabs(h / sh)),
+                                &k);
+    if (!pic) {
+      return;
+    }
+    double ky = (double)pic->h / nh;
+    sx = sx * k;
+    sy = sy * ky;
+    sw = sw * k;
+    sh = sh * ky;
   }
   bdfi_mat place = {{w / sw, 0, 0, h / sh, x - sx * w / sw, y - sy * h / sh}};
   if (!bdfi_mat_finite(&place)) {

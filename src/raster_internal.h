@@ -409,8 +409,11 @@ typedef struct bdfi_picture {
   bdfi_bitmap levels[BDFI_MAX_LEVELS];
   int nlevels;
   uint64_t used;   /* the drawing that used it last */
-  size_t part;     /* the part it is the image of */
   uint64_t serial; /* its number among the pictures of the renderer: never given again */
+  /* where it is kept, which is told when the renderer lets go of it: the
+   * pointer is set to NULL, and the flag (when there is one) to 0 */
+  struct bdfi_picture **owner;
+  uint8_t *owner_flag;
 } bdfi_picture;
 
 BDF_INTERNAL bdf_status bdfi_picture_decode(const uint8_t *data, size_t len, bdfi_picture **out,
@@ -430,8 +433,11 @@ typedef struct bdfi_pattern_shader {
   int level;
 } bdfi_pattern_shader;
 
+/* kx and ky are the units of the pattern space a pixel of img is (1 for the
+ * image of a part; the raster of an SVG image is as large as it is drawn). */
 BDF_INTERNAL int bdfi_pattern_shader_init(bdfi_pattern_shader *s, const bdf_paint *paint,
-                                          bdfi_picture *img, const bdfi_mat *m, int *oom);
+                                          bdfi_picture *img, const bdfi_mat *m, double kx,
+                                          double ky, int *oom);
 
 /* An image, or a part of it, drawn into a rectangle whose outline is the
  * coverage. */
@@ -446,6 +452,26 @@ typedef struct bdfi_image_shader {
 BDF_INTERNAL void bdfi_image_shader_init(bdfi_image_shader *s, bdfi_picture *img,
                                          const bdfi_mat *inv, int smooth, double sx0, double sy0,
                                          double sx1, double sy1, int *oom);
+
+/* ---- SVG images (rsvg.c) -------------------------------------------------- */
+
+/* An SVG image part: its document, and the rasters drawn of it. */
+typedef struct bdfi_svg_image bdfi_svg_image;
+
+struct bdf_renderer;
+/* An SVG image read: NULL for what is no SVG document (*status says why). */
+BDF_INTERNAL bdfi_svg_image *bdfi_svg_image_new(const uint8_t *data, size_t len,
+                                                bdf_status *status);
+BDF_INTERNAL void bdfi_svg_image_free(bdfi_svg_image *si);
+/* Its natural size in CSS px. */
+BDF_INTERNAL void bdfi_svg_image_size(const bdfi_svg_image *si, double *w, double *h);
+/* What reading it left out. */
+BDF_INTERNAL size_t bdfi_svg_image_warnings(const bdfi_svg_image *si, const char *const **out);
+/* A raster of the image for k device pixels an image pixel, among the
+ * pictures the renderer keeps; *scale is the scale it was drawn at. NULL
+ * when the renderer has no room for it. */
+BDF_INTERNAL bdfi_picture *bdfi_svg_image_raster(struct bdf_renderer *r, bdfi_svg_image *si,
+                                                 double k, double *scale);
 
 /* ---- Fonts --------------------------------------------------------------- */
 
@@ -561,7 +587,8 @@ typedef struct bdfi_robj {
   uint8_t *coll_data;
   uint8_t coll_state;
   bdfi_picture *pic; /* the part as an image (the renderer's kept list owns it) */
-  uint8_t pic_state; /* 0: not asked for; 1: there; 2: none (not decodable) */
+  uint8_t pic_state; /* 0: not asked for; 1: there; 2: none (not decodable, or an SVG image) */
+  bdfi_svg_image *svg; /* the part as an SVG image */
   bdfi_face *font;    /* the part as a font */
   uint8_t font_state; /* 0: not asked for; 1: there; 2: none (not readable) */
 } bdfi_robj;
@@ -617,6 +644,26 @@ BDF_INTERNAL bdfi_robj *bdfi_r_part_slot(struct bdf_renderer *r, const uint8_t h
 /* The picture of an image part, or NULL: for one that is missing or cannot
  * be decoded (warned of once), and for an SVG image. */
 BDF_INTERNAL bdfi_picture *bdfi_r_picture(struct bdf_renderer *r, const uint8_t hash[16]);
+/* An SVG image part, or NULL. */
+BDF_INTERNAL bdfi_svg_image *bdfi_r_svg(struct bdf_renderer *r, const uint8_t hash[16]);
+/* makeRoom: room for a picture of n pixels among those kept; whether there
+ * is some. */
+BDF_INTERNAL int bdfi_r_make_room(struct bdf_renderer *r, int64_t n);
+/* keep: counts a picture among those kept. owner is where it is kept, and
+ * flag what is set to 0 with it, or NULL (see bdfi_picture). 0 when out of
+ * memory: the picture is the caller's still. */
+BDF_INTERNAL int bdfi_r_keep(struct bdf_renderer *r, bdfi_picture *p, bdfi_picture **owner,
+                             uint8_t *flag);
+/* decode: a bitmap image decoded to keep, with room made for it first:
+ * NULL for one that cannot be decoded (warned of), or that there is no room
+ * for while this image is drawn (*full), or when out of memory. */
+BDF_INTERNAL bdfi_picture *bdfi_r_decode(struct bdf_renderer *r, const uint8_t *data, size_t len,
+                                         bdfi_picture **owner, uint8_t *flag, int *full);
+/* What is said of a line whose outline was cut, and of pictures past the
+ * room of the renderer (with a long long). */
+#define BDFI_STROKE_CUT "a line has too many dashes, joins and caps: the rest of it is not drawn"
+#define BDFI_TOO_MANY_PIXELS                                                                       \
+  "the images of a page have more than %lld pixels in all: the rest of them is not drawn"
 BDF_INTERNAL bdfi_scratch *bdfi_r_scratch(struct bdf_renderer *r);
 BDF_INTERNAL bdfi_surface *bdfi_r_new_surface(struct bdf_renderer *r, int w, int h);
 BDF_INTERNAL void bdfi_r_release(struct bdf_renderer *r, bdfi_surface *s);
@@ -633,6 +680,7 @@ typedef struct bdfi_style {
   /* the image of a pattern, or NULL when it could not be decoded. The
    * renderer keeps it at least as long as the image being drawn. */
   bdfi_picture *image;
+  bdfi_svg_image *svg; /* or the SVG image of the pattern, drawn at the scale it is used at */
 } bdfi_style;
 
 /* The drawing state of a context: what SAVE and RESTORE keep. */

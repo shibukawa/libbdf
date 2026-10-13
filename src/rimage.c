@@ -450,11 +450,15 @@ static void bdfi_pattern_shade(const bdfi_shader *sh, int x, int y, int n, float
 /* newPatternShader: a pattern of an image drawn under m. 0 when it draws
  * nothing (the caller draws transparent black). */
 BDF_INTERNAL int bdfi_pattern_shader_init(bdfi_pattern_shader *s, const bdf_paint *paint,
-                                          bdfi_picture *img, const bdfi_mat *m, int *oom) {
+                                          bdfi_picture *img, const bdfi_mat *m, double kx,
+                                          double ky, int *oom) {
   const float *pm = paint->matrix;
   bdfi_mat pattern = {
       {(double)pm[0], (double)pm[1], (double)pm[2], (double)pm[3], (double)pm[4], (double)pm[5]}};
   bdfi_mat full = bdfi_mat_mul2(*m, pattern);
+  if (kx != 1 || ky != 1) {
+    full = bdfi_mat_scale(full, kx, ky);
+  }
   if (!img || !bdfi_mat_invert(&full, &s->inv)) {
     return 0;
   }

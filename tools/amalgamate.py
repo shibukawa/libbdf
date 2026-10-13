@@ -53,13 +53,21 @@ ORDER = [
     "sfnt.c",
     "fontdb.c",
     "rtext.c",
+    "svg_str.c",
+    "svg_float.c",
+    "svg_value.c",
+    "svg_xml.c",
+    "svg_css.c",
+    "svg_doc.c",
+    "rsvg.c",
     "rcanvas.c",
     "rdraw.c",
     "render.c",
     "version.c",
 ]
 
-LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"\s*$')
+# an include of a local header, with or without a comment after it
+LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"\s*(?:/\*.*\*/\s*|//.*)?$')
 # the two headers every source includes, which come first in the output
 COMMON = {"bdf/bdf.h", "bdf_internal.h"}
 

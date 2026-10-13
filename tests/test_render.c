@@ -198,6 +198,57 @@ static void test_reference_text(void) {
   bdf_fonts_free(fonts);
 }
 
+/* Documents with SVG images, as the reference draws them (with the same
+ * fonts for their text). */
+static void test_reference_svg(void) {
+  bdf_error err;
+  bdf_fonts *fonts = NULL;
+  CHECK(bdf_fonts_new(&fonts, &err) == BDF_OK);
+  for (size_t i = 0; i < RV_FONTS; i++) {
+    CHECK(bdf_fonts_add(fonts, rv_fonts + rv_font[i].off, rv_font[i].len, &err) == BDF_OK);
+  }
+  CHECK(bdf_fonts_count(fonts) == RV_FONTS);
+  bdf_render_options opts = {0, 0, fonts};
+  for (size_t d = 0; d < RV_SVG_DOCUMENTS; d++) {
+    bdf_doc *doc = NULL;
+    bdf_renderer *r = NULL;
+    CHECK(bdf_doc_open_memory(rv_svg_documents + rv_svg_document[d].off, rv_svg_document[d].len, &doc,
+                              &err) == BDF_OK);
+    CHECK(bdf_renderer_new(doc, &opts, &r, &err) == BDF_OK);
+    for (size_t i = 0; i < RV_SVG_RENDERS; i++) {
+      if (rv_svg_render[i].doc != d) {
+        continue;
+      }
+      bdf_image img;
+      bdf_status st;
+      if (rv_svg_render[i].scale > 0) {
+        st = bdf_render_page(r, rv_svg_render[i].view, rv_svg_render[i].page, rv_svg_render[i].scale, &img,
+                             &err);
+      } else {
+        st = bdf_render_region(r, rv_svg_render[i].view, rv_svg_render[i].page, rv_svg_render[i].region,
+                               rv_svg_render[i].w, rv_svg_render[i].h, &img, &err);
+      }
+      if (st != BDF_OK) {
+        failures++;
+        fprintf(stderr, "SVG document %zu, render %zu: %s\n", d, i, err.message);
+        continue;
+      }
+      if (img.width != rv_svg_render[i].w || img.height != rv_svg_render[i].h) {
+        failures++;
+        fprintf(stderr, "SVG document %zu, render %zu: %d×%d, want %d×%d\n", d, i, img.width, img.height,
+                rv_svg_render[i].w, rv_svg_render[i].h);
+      } else if (fnv(img.pixels, 4 * (size_t)img.width * (size_t)img.height) != rv_svg_render[i].hash) {
+        failures++;
+        fprintf(stderr, "SVG document %zu, render %zu: the pixels are not those the reference draws\n", d, i);
+      }
+      bdf_image_free(&img);
+    }
+    bdf_renderer_free(r);
+    bdf_doc_free(doc);
+  }
+  bdf_fonts_free(fonts);
+}
+
 static void add_part(docb *d, uint32_t id, const char *type, const void *bytes, size_t n) {
   wr w = {0};
   w_bytes(&w, bytes, n);
@@ -585,19 +636,175 @@ static void test_images(void) {
   CHECK(pixel(&img, 0, 0) == 0xffffffff && pixel(&img, 1, 1) == 0xffffffff);
   CHECK(warned(r, "an image of more than 104857600 pixels is not drawn"));
   CHECK(warned(r, "AVIF images are not drawn"));
-  CHECK(warned(r, "SVG images are not drawn"));
   CHECK(warned(r, "an image (png) cannot be decoded"));
   CHECK(warned(r, "an image () cannot be decoded"));
   CHECK(warned(r, "image 00000009000000000000000000000000 is missing"));
   CHECK(warned(r, "bad image reference"));
-  CHECK(bdf_renderer_warning_count(r) == 7);
+  /* (the SVG image among them is an empty one: it draws nothing, and is read) */
+  CHECK(bdf_renderer_warning_count(r) == 6);
   bdf_image_free(&img);
   /* said once, however often they are drawn */
   CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
-  CHECK(bdf_renderer_warning_count(r) == 7);
+  CHECK(bdf_renderer_warning_count(r) == 6);
   bdf_image_free(&img);
 
   bdf_renderer_free(r);
+  bdf_doc_free(doc);
+  free(keep.b);
+}
+
+/* SVG images: shapes, a translucent element, a clip path, use, a transform,
+ * path data, a nested viewport, a gradient, text in a font of the
+ * application, an image inside; an SVG image in part and as a pattern; and
+ * what is said of what is not drawn. */
+static void test_svg(void) {
+  static const char shapes[] =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+      "width=\"16\" height=\"16\">"
+      "<defs>"
+      "<linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#f00\"/>"
+      "<stop offset=\"1\" stop-color=\"#00f\"/></linearGradient>"
+      "<clipPath id=\"c\"><rect x=\"8\" y=\"0\" width=\"4\" height=\"4\"/></clipPath>"
+      "<rect id=\"r\" width=\"2\" height=\"2\" fill=\"#0f0\"/>"
+      "</defs>"
+      "<rect x=\"0\" y=\"0\" width=\"4\" height=\"4\" fill=\"#f00\"/>"
+      "<rect x=\"4\" y=\"0\" width=\"4\" height=\"4\" fill=\"blue\" opacity=\"0.5\"/>"
+      "<rect x=\"6\" y=\"0\" width=\"10\" height=\"10\" clip-path=\"url(#c)\"/>"
+      "<use xlink:href=\"#r\" x=\"12\" y=\"0\"/>"
+      "<g transform=\"translate(0 4) scale(2)\" fill=\"#ff0\"><rect width=\"2\" height=\"2\"/></g>"
+      /* the data of a path ends at what is no command: here after its Z */
+      "<path d=\"M4 4H8V8H4Z5 L16 16 0 16\" style=\"fill: #0ff\"/>"
+      "<circle cx=\"13\" cy=\"6\" r=\"2\" fill=\"none\" stroke=\"#f0f\" stroke-width=\"0.5\"/>"
+      "<rect x=\"0\" y=\"8\" width=\"8\" height=\"4\" fill=\"url(#g)\"/>"
+      "<svg x=\"8\" y=\"8\" width=\"4\" height=\"4\" viewBox=\"0 0 2 2\">"
+      "<rect width=\"1\" height=\"1\" fill=\"#f00\"/>"
+      "<rect x=\"1\" y=\"1\" width=\"9\" height=\"9\" fill=\"#00f\"/></svg>"
+      "<text x=\"0\" y=\"16\" font-family=\"Boxes\" font-size=\"4\">A</text>"
+      "<image x=\"12\" y=\"12\" width=\"4\" height=\"4\" href=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAE0lEQVR42mP4z8DwHwyBNAg0AABJSQl4nFEXkgAAAABJRU5ErkJggg==\"/>"
+      "</svg>";
+  static const char left_out[] =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"4\" height=\"4\">"
+      "<defs><pattern id=\"p\" width=\"1\" height=\"1\"><rect width=\"1\" height=\"1\"/></pattern>"
+      "<mask id=\"m\"/></defs>"
+      "<rect width=\"4\" height=\"4\" fill=\"url(#p)\"/>"
+      "<rect width=\"2\" height=\"2\" fill=\"url(#p) #f00\"/>"
+      "<rect x=\"2\" width=\"2\" height=\"2\" mask=\"url(#m)\" fill=\"#00f\"/>"
+      "<image width=\"1\" height=\"1\" href=\"other.png\"/>"
+      "<image width=\"1\" height=\"1\" href=\"data:image/png;base64,AAAA\"/>"
+      "</svg>";
+  static const char stripes[] = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2\" height=\"2\">"
+                                "<rect width=\"1\" height=\"2\" fill=\"#f00\"/></svg>";
+  static const char page[] = "<html><body>not an image</body></html>";
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  bdf_image img;
+  add_image(&d, 1, shapes, sizeof shapes - 1);
+  add_image(&d, 2, left_out, sizeof left_out - 1);
+  add_image(&d, 3, stripes, sizeof stripes - 1);
+  add_image(&d, 4, page, sizeof page - 1);
+
+  /* 20: the image at its size */
+  ob a = {0};
+  ob_draw_image(&a, ob_image(&a, 1), 0, 0, 16, 16);
+  docb_object(&d, 20, &a);
+  /* 21: its top left corner, four times as large; and stripes as a pattern */
+  ob b = {0};
+  const float corner[4] = {0, 0, 4, 4};
+  ob_draw_image_sub(&b, ob_image(&b, 1), corner, 0, 0, 16, 12);
+  ob_fill_paint(&b, ob_pattern(&b, ob_image(&b, 3), BDF_REPEAT, 1, 0, 0));
+  ob_rect(&b, BDF_OP_FILL_RECT, 0, 12, 16, 4);
+  docb_object(&d, 21, &b);
+  /* 22: what is not drawn */
+  ob c = {0};
+  ob_draw_image(&c, ob_image(&c, 2), 0, 0, 4, 4);
+  ob_draw_image(&c, ob_image(&c, 4), 0, 0, 4, 4);
+  docb_object(&d, 22, &c);
+
+  char views[1024], n20[33], n21[33], n22[33];
+  part_name(20, n20);
+  part_name(21, n21);
+  part_name(22, n22);
+  snprintf(views, sizeof views,
+           "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":["
+           "{\"w\":16,\"h\":16,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":16,\"h\":16,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":4,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]}]",
+           n20, n21, n22);
+  bdf_doc *doc = docb_open(&d, views, &keep);
+  bdf_fonts *fonts = NULL;
+  CHECK(bdf_fonts_new(&fonts, &err) == BDF_OK);
+  CHECK(bdf_fonts_add(fonts, rv_font_boxes, sizeof rv_font_boxes, &err) == BDF_OK);
+  bdf_render_options opts = {0, 0, fonts};
+  bdf_renderer *r = NULL;
+  CHECK(bdf_renderer_new(doc, &opts, &r, &err) == BDF_OK);
+
+  const uint32_t red = 0xff0000ff, lime = 0x00ff00ff, blue = 0x0000ffff, black = 0x000000ff;
+  const uint32_t white = 0xffffffff, yellow = 0xffff00ff, cyan = 0x00ffffff;
+  for (int scale = 1; scale <= 2; scale++) {
+    /* twice the size is a raster of its own, of twice the pixels */
+    int k = scale;
+    CHECK(bdf_render_page(r, 0, 0, scale, &img, &err) == BDF_OK);
+    CHECK(img.width == 16 * k && img.height == 16 * k);
+    CHECK(pixel(&img, 0, 0) == red && pixel(&img, 4 * k - 1, 4 * k - 1) == red);
+    /* blue at half its opacity (128 of 255 in the raster of the image), on
+     * the white of the page */
+    CHECK(pixel(&img, 4 * k, 0) == 0x7f7fffff && pixel(&img, 8 * k - 1, 4 * k - 1) == 0x7f7fffff);
+    /* the black rectangle through its clip path: over the half blue there is none */
+    CHECK(pixel(&img, 8 * k, 0) == black && pixel(&img, 11 * k - 1, 4 * k - 1) == black &&
+          pixel(&img, 12 * k - 1, 0) == black);
+    CHECK(pixel(&img, 7 * k, k) == 0x7f7fffff && pixel(&img, 9 * k, 5 * k) == white);
+    /* the rectangle a use element draws, where it puts it */
+    CHECK(pixel(&img, 12 * k, 0) == lime && pixel(&img, 14 * k - 1, 2 * k - 1) == lime);
+    CHECK(pixel(&img, 14 * k, 0) == white && pixel(&img, 12 * k, 2 * k) == white);
+    /* a group moved and made twice as large, with the fill its child takes */
+    CHECK(pixel(&img, 0, 4 * k) == yellow && pixel(&img, 4 * k - 1, 8 * k - 1) == yellow);
+    /* the path up to its Z: what follows the 5 is not read */
+    CHECK(pixel(&img, 4 * k, 4 * k) == cyan && pixel(&img, 8 * k - 1, 8 * k - 1) == cyan);
+    CHECK(pixel(&img, 8 * k, 12 * k) == white);
+    /* a ring: nothing in its middle */
+    CHECK(pixel(&img, 13 * k - 1, 6 * k - 1) == white && pixel(&img, 13 * k - 1, 4 * k) != white);
+    /* a gradient over the bounding box, from red to blue */
+    uint32_t left = pixel(&img, 0, 9 * k), right = pixel(&img, 8 * k - 1, 9 * k);
+    CHECK(left >> 24 > 0xe0 && (left >> 8 & 0xff) < 0x20 && right >> 24 < 0x20 && (right >> 8 & 0xff) > 0xe0);
+    /* a viewport of its own: two units of it are four of the image, and what is past it is cut */
+    CHECK(pixel(&img, 8 * k, 8 * k) == red && pixel(&img, 10 * k - 1, 10 * k - 1) == red);
+    CHECK(pixel(&img, 10 * k, 10 * k) == blue && pixel(&img, 12 * k - 1, 12 * k - 1) == blue);
+    CHECK(pixel(&img, 10 * k, 8 * k) == white && pixel(&img, 12 * k, 12 * k - 1) == white);
+    /* a box of the font, on its baseline */
+    CHECK(pixel(&img, k, 14 * k) == black && pixel(&img, 3 * k - 1, 16 * k - 1) == black);
+    CHECK(pixel(&img, 0, 14 * k) != black && pixel(&img, k, 12 * k + k - 1) == white);
+    /* the image in it, its four pixels in the corners of its box */
+    CHECK(pixel(&img, 12 * k, 12 * k) == red && pixel(&img, 16 * k - 1, 12 * k) == lime);
+    CHECK(pixel(&img, 12 * k, 16 * k - 1) == blue && pixel(&img, 16 * k - 1, 16 * k - 1) == white);
+    CHECK(bdf_renderer_warning_count(r) == 0);
+    bdf_image_free(&img);
+  }
+
+  /* a part of it is in the units of its size, and as sharp as it is shown */
+  CHECK(bdf_render_page(r, 0, 1, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 0, 0) == red && pixel(&img, 15, 11) == red && pixel(&img, 8, 6) == red);
+  /* the pattern: a red stripe and nothing, again and again */
+  CHECK(pixel(&img, 0, 12) == red && pixel(&img, 1, 13) == white && pixel(&img, 2, 14) == red &&
+        pixel(&img, 15, 15) == white);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+
+  CHECK(bdf_render_page(r, 0, 2, 1, &img, &err) == BDF_OK);
+  /* the colour after a pattern is drawn in its place, and a mask is not applied */
+  CHECK(pixel(&img, 0, 0) == red && pixel(&img, 1, 1) == red && pixel(&img, 2, 0) == blue);
+  CHECK(pixel(&img, 0, 2) == white && pixel(&img, 3, 3) == white);
+  CHECK(warned(r, "SVG patterns are not drawn"));
+  CHECK(warned(r, "SVG masks are not applied"));
+  CHECK(warned(r, "SVG images linking to other files are not drawn"));
+  CHECK(warned(r, "an image () cannot be decoded"));
+  CHECK(warned(r, "an image in an SVG image cannot be decoded"));
+  CHECK(warned(r, "an SVG image cannot be read"));
+  CHECK(bdf_renderer_warning_count(r) == 6);
+  bdf_image_free(&img);
+
+  bdf_renderer_free(r);
+  bdf_fonts_free(fonts);
   bdf_doc_free(doc);
   free(keep.b);
 }
@@ -738,5 +945,7 @@ int main(void) {
   test_reference_images();
   test_text();
   test_reference_text();
+  test_svg();
+  test_reference_svg();
   return finish();
 }
