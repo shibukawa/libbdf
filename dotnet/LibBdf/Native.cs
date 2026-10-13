@@ -214,6 +214,9 @@ public static unsafe class Native
     public static extern int bdf_fonts_add(IntPtr fonts, byte* data, nuint len, Error* err);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int bdf_fonts_add_file(IntPtr fonts, byte* path, Error* err);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     public static extern nuint bdf_fonts_count(IntPtr fonts);
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]

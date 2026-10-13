@@ -1013,7 +1013,9 @@ typedef struct bdf_renderer bdf_renderer;
  * bdf_fonts_add copies a font file that is in memory (TrueType, OpenType,
  * or a collection of them); bdf_fonts_add_file takes a path, reads the
  * names of its faces now and the glyphs when a renderer first draws with
- * one. Both return BDF_ERR_FORMAT for what has no face that can be read. A
+ * one. The path is UTF-8 on every system (on Windows a path that is not, or
+ * that names no file so, is then tried in the system's code page). Both
+ * return BDF_ERR_FORMAT for what has no face that can be read. A
  * set is not changed once a renderer has it; renderers on several threads
  * may share one, which must outlive them.
  */
