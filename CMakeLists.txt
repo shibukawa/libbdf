@@ -60,6 +60,13 @@ set(BDF_SOURCES
   src/sfnt.c
   src/fontdb.c
   src/rtext.c
+  src/svg_str.c
+  src/svg_float.c
+  src/svg_value.c
+  src/svg_xml.c
+  src/svg_css.c
+  src/svg_doc.c
+  src/rsvg.c
   src/rcanvas.c
   src/rdraw.c
   src/render.c
@@ -167,6 +174,8 @@ if(BDF_BUILD_FUZZ)
   target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_DRAWN=65536 BDF_MAX_SHADOW_BLUR=16)
   # And images of a hundred megapixels.
   target_compile_definitions(bdf PRIVATE BDF_MAX_DECODE_PIXELS=1048576)
+  # And SVG images drawn large, of hundreds of thousands of elements.
+  target_compile_definitions(bdf PRIVATE BDF_MAX_SVG_RASTER_PIXELS=65536 BDF_MAX_SVG_ELEMENTS=2000)
   add_subdirectory(fuzz)
 endif()
 
