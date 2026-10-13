@@ -113,7 +113,7 @@ libbdf 側は `tests/conformance.c` が suite を読んで同じ検査をする�
 
 **.NET のアダプタは C# で書いた**。SkiaSharp の上では、C++ の Skia アダプタ（`adapters/skia`）をネイティブに同梱するより、コアのプレイヤー（§16）のコールバックを C# の関数ポインタ（`UnmanagedCallersOnly`）で受けて `SKCanvas` を呼ぶほうが、SkiaSharp が持つ Skia のバイナリとバージョンを合わせる問題が起きない。例外は C のコアをまたがせない（C++ のアダプタと同じ）。
 
-**リリース**。`v<バージョン>` のタグで `.github/workflows/release.yml` が動き、単一ヘッダ、3 つの OS のバイナリ（静的と共有、CMake パッケージと pkg-config 込みのインストール ツリー）、xcframework、NuGet パッケージを作って、下書きのリリースに付ける。タグとヘッダのバージョンが違えば止まる。レジストリ（vcpkg、ConanCenter、WrapDB、nuget.org）への公開はしていない。リリースのあと手で直すのは、vcpkg のポートの `SHA512` と Meson の wrap の `revision` の 2 か所。
+**リリース**。`v<バージョン>` のタグで `.github/workflows/release.yml` が動き、単一ヘッダ、3 つの OS のバイナリ（静的と共有、CMake パッケージと pkg-config 込みのインストール ツリー）、xcframework、NuGet パッケージを作って、下書きのリリースに付ける。タグとヘッダのバージョンが違えば止まる。付ける前に `packaging/release-files.sh` が、全部のファイルが揃っていること、ヘッダのバージョンのものであること、中身（NuGet パッケージなら 4 つのプラットフォームの共有ライブラリ）を確かめる。タグなしでも、手で起動したときと、このワークフローやそのスクリプトを変える PR では同じビルドと検査をしてリリースだけを作らないので、タグを打つ前に予行が済んでいる。レジストリ（vcpkg、ConanCenter、WrapDB、nuget.org）への公開はしていない。リリースのあと手で直すのは、vcpkg のポートの `SHA512` と Meson の wrap の `revision` の 2 か所。
 
 ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラが違っても壊れないことを CI の MSVC と clang の両方のビルドで確かめる。依存は vendoring した Brotli のデコーダだけで、画像のデコーダもフォントの読み手も自前（§14、§15）なので、既定のビルドはどの経路でも自己完結している。
 

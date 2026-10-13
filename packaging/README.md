@@ -22,8 +22,13 @@ The CI builds a consumer through each of them (`packaging` in
 
 The release workflow (`.github/workflows/release.yml`) runs on a tag
 `v<version>` and makes a draft release with the single header, the binaries
-of each platform, the xcframework and the NuGet packages. Two things are
-still by hand afterwards:
+of each platform, the xcframework and the NuGet packages. Before it attaches
+them, `packaging/release-files.sh` checks that each is there, of the version
+of the header, with what it is for inside (the libraries of every platform
+in the NuGet package, say). The workflow also runs without a tag, when it is
+dispatched by hand and for a pull request that changes it or its scripts:
+then it builds and checks the same and makes no release, so that what a tag
+will do has been done before. Two things are still by hand afterwards:
 
 - `packaging/vcpkg/bdf/portfile.cmake`: the `SHA512` of the release's
   source archive (vcpkg prints it), and `vcpkg.json`'s version;
