@@ -180,8 +180,8 @@ struct bdf_object {
 
 /* bdfi_read_string reads a length-prefixed string into a NUL-terminated copy. */
 static char *bdfi_read_string(bdfi_reader *r, size_t *len, int *oom) {
-  size_t n = bdfi_rd_count(r, 1, "bad string length");
-  const uint8_t *p = bdfi_rd_bytes(r, n);
+  size_t n;
+  const uint8_t *p = bdfi_rd_string(r, &n);
   if (r->failed) {
     return NULL;
   }

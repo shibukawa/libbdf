@@ -16,8 +16,6 @@
 
 static const char bdfi_svg_not_svg[] = "svg: no svg root element";
 static const char bdfi_svg_bad_encoding[] = "svg: the document is in an encoding that is not read";
-static const char bdfi_svg_big_entities[] =
-    "svg: the entities of the document stand for more than a megabyte";
 static const char bdfi_svg_big_sheets[] =
     "svg: the style sheets declare more for the elements than is kept";
 static const char bdfi_svg_big_input[] = "svg: the document is larger than is read";
@@ -27,9 +25,6 @@ const char *bdfi_svg_msg_not_svg(void) {
 }
 const char *bdfi_svg_msg_encoding(void) {
   return bdfi_svg_bad_encoding;
-}
-const char *bdfi_svg_msg_entities(void) {
-  return bdfi_svg_big_entities;
 }
 const char *bdfi_svg_msg_sheets(void) {
   return bdfi_svg_big_sheets;
@@ -266,10 +261,6 @@ static bdf_status bdfi_svg_read(bdfi_svg_parser *p, int64_t depth, int64_t most,
     if (st == BDFI_XML_ENCODING) {
       *msg = bdfi_svg_msg_encoding();
       return BDF_ERR_FORMAT;
-    }
-    if (st == BDFI_XML_ENTITIES) {
-      *msg = bdfi_svg_msg_entities();
-      return BDF_ERR_TOO_LARGE;
     }
     if (st != BDFI_XML_OK || k == BDFI_XML_EOF) {
       /* an error keeps what was read, as browsers draw up to an error */

@@ -966,8 +966,7 @@ static void bdfi_tx_clip(bdfi_tstate *st, double x, double y, double w, double h
  * decoder that replaces what is malformed makes it (String.length). */
 static size_t bdfi_utf16_len(const char *s, size_t n) {
   size_t units = 0, len;
-  /* such a decoder drops a byte order mark at the start */
-  for (size_t i = n >= 3 && memcmp(s, "\xEF\xBB\xBF", 3) == 0 ? 3 : 0; i < n; i += len) {
+  for (size_t i = 0; i < n; i += len) {
     units += bdfi_utf8_next(s, n, i, &len) > 0xFFFF ? 2 : 1;
   }
   return units;

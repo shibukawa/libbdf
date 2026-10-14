@@ -159,7 +159,6 @@ BDF_INTERNAL void bdfi_svg_free(bdfi_svg_doc *doc);
 /* The messages of bdfi_svg_parse (static strings, compared by address). */
 BDF_INTERNAL const char *bdfi_svg_msg_not_svg(void);  /* ErrNotSVG */
 BDF_INTERNAL const char *bdfi_svg_msg_encoding(void); /* an encoding that is not read */
-BDF_INTERNAL const char *bdfi_svg_msg_entities(void); /* entities for more than a megabyte */
 BDF_INTERNAL const char *bdfi_svg_msg_sheets(void);   /* more declarations than are kept */
 BDF_INTERNAL const char *bdfi_svg_msg_input(void);    /* more bytes than are read */
 
@@ -313,8 +312,7 @@ enum {
   BDFI_XML_OK = 0,
   BDFI_XML_STOP,     /* an error of the reference's reader: the document ends here */
   BDFI_XML_NOMEM,    /* out of memory */
-  BDFI_XML_ENCODING, /* an encoding the reference reads and this library does not */
-  BDFI_XML_ENTITIES  /* the entities of a DOCTYPE stand for more than a megabyte */
+  BDFI_XML_ENCODING  /* an encoding the reference reads and this library does not */
 };
 
 /* A growable run of bytes. */
@@ -344,6 +342,9 @@ typedef struct bdfi_xml_reader {
   size_t r, w;        /* buf[r..w) is unread */
   int switched;       /* an encoding was switched to: buf is not the start of the document */
   int marked;         /* the document had a UTF-16 byte order mark */
+  int prolog;         /* no element yet: a DOCTYPE or an XML declaration may still come */
+  int decl_seen;      /* the one XML declaration has been read */
+  int doctype_seen;   /* the one DOCTYPE has been read */
   uint8_t *owned;     /* what buf points into, when it is not the caller's */
   int kind;
   int pending_end; /* a start tag that ends its element: the end is the next token */
@@ -362,10 +363,10 @@ typedef struct bdfi_xml_reader {
   bdfi_xml_buf alt;   /* text and values with the entities of the tables replaced */
   bdfi_xml_buf label; /* the encoding the declaration named */
   bdfi_xml_entity
-      *ents; /* the entities of the DOCTYPEs, in their order: the first of a name counts */
+      *ents; /* the entities of the DOCTYPE, in their order: the first of a name counts */
   size_t nents, ents_cap;
   bdfi_arena ent_arena; /* their names and values */
-  uint64_t ent_text;    /* what the references to them stood for so far */
+  uint64_t grown;       /* bytes entity substitution has added to the document, bounded by max_buffer */
   size_t max_buffer;    /* Options.MaxBufferBytes as xmltree.Open sets it */
 } bdfi_xml_reader;
 

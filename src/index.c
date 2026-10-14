@@ -93,8 +93,8 @@ bdf_status bdf_text_index_decode(const uint8_t *data, size_t len, bdf_text_index
     run->b = (uint32_t)bdfi_rd_varuint(r);
     run->ordinal = (uint32_t)bdfi_rd_varuint(r);
     run->sep = bdfi_rd_u8(r);
-    size_t slen = bdfi_rd_count(r, 1, "bad string length");
-    const uint8_t *s = bdfi_rd_bytes(r, slen);
+    size_t slen;
+    const uint8_t *s = bdfi_rd_string(r, &slen);
     if (r->failed) {
       break;
     }

@@ -226,11 +226,7 @@ uint32_t bdfi_utf8_next(const char *s, size_t n, size_t i, size_t *len) {
 
 size_t bdfi_utf8_put(uint32_t c, char *out) { return bdfi_utf8_encode(c, (uint8_t *)out); }
 
-typedef struct bdfi_cps {
-  uint32_t *c;
-  uint8_t *cc; /* the combining class of each */
-  size_t n, cap;
-} bdfi_cps;
+typedef bdfi_points bdfi_cps;
 
 static int bdfi_cps_push(bdfi_cps *b, uint32_t c) {
   if (b->n == b->cap) {
@@ -304,6 +300,102 @@ static int bdfi_reorder(bdfi_cps *b) {
   return 0;
 }
 
+/* The decomposition of a character, canonical or with compat that of form
+ * KD, added to d. */
+static int bdfi_decompose(bdfi_cps *d, uint32_t c, int compat) {
+  size_t m = 0;
+  const uint32_t *seq = compat ? bdfi_nfkd_of(c, &m) : NULL;
+  if (!seq) {
+    seq = bdfi_nfd_of(c, &m);
+  }
+  if (seq) {
+    for (size_t k = 0; k < m; k++) {
+      if (bdfi_cps_push(d, seq[k]) < 0) {
+        return -1;
+      }
+    }
+    return 0;
+  }
+  if (c >= BDFI_HANGUL_S && c < BDFI_HANGUL_S + BDFI_HANGUL_SCOUNT) {
+    uint32_t si = c - BDFI_HANGUL_S;
+    uint32_t t = si % BDFI_HANGUL_TCOUNT;
+    if (bdfi_cps_push(d, BDFI_HANGUL_L + si / BDFI_HANGUL_NCOUNT) < 0 ||
+        bdfi_cps_push(d, BDFI_HANGUL_V + (si % BDFI_HANGUL_NCOUNT) / BDFI_HANGUL_TCOUNT) < 0 ||
+        (t != 0 && bdfi_cps_push(d, BDFI_HANGUL_T + t) < 0)) {
+      return -1;
+    }
+    return 0;
+  }
+  return bdfi_cps_push(d, c);
+}
+
+/* Composes decomposed characters in their canonical order, in place, and
+ * returns how many are left: a character composes with the last starter
+ * unless a character between them blocks it (one of class 0, or of its
+ * class or a higher one). */
+static size_t bdfi_compose(bdfi_cps *d) {
+  size_t k = 0;
+  size_t starter = SIZE_MAX;
+  uint8_t last_cc = 0;
+  for (size_t i = 0; i < d->n; i++) {
+    uint32_t c = d->c[i];
+    uint8_t cc = d->cc[i];
+    if (starter != SIZE_MAX && (k == starter + 1 || (last_cc != 0 && last_cc < cc))) {
+      uint32_t composite = bdfi_compose_pair(d->c[starter], c);
+      if (composite) {
+        d->c[starter] = composite;
+        continue;
+      }
+    }
+    if (cc == 0) {
+      starter = k;
+    }
+    last_cc = cc;
+    d->c[k++] = c;
+  }
+  return k;
+}
+
+int bdfi_nfkc_points(bdfi_points *w, const uint32_t *in, size_t n) {
+  w->n = 0;
+  for (size_t i = 0; i < n; i++) {
+    if (bdfi_decompose(w, in[i], 1) < 0) {
+      return -1;
+    }
+  }
+  if (bdfi_reorder(w) < 0) {
+    return -1;
+  }
+  w->n = bdfi_compose(w);
+  return 0;
+}
+
+int bdfi_is_mark(uint32_t c) {
+  size_t lo = 0, hi = sizeof bdfi_mark_ranges / sizeof bdfi_mark_ranges[0];
+  if (c < bdfi_mark_ranges[0][0]) {
+    return 0;
+  }
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (c < bdfi_mark_ranges[mid][0]) {
+      hi = mid;
+    } else if (c > bdfi_mark_ranges[mid][1]) {
+      lo = mid + 1;
+    } else {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+int bdfi_nfkc_alone(uint32_t c) {
+  size_t n;
+  return bdfi_ccc(c) == 0 && !(c >= BDFI_HANGUL_S && c < BDFI_HANGUL_S + BDFI_HANGUL_SCOUNT) &&
+         !bdfi_nfkd_of(c, &n) && !bdfi_nfd_of(c, &n) && !bdfi_is_mark(c);
+}
+
+int bdfi_composes(uint32_t a, uint32_t b) { return bdfi_compose_pair(a, b) != 0; }
+
 /* Form C, or with compat form KC: the compatibility decompositions are
  * taken first, and what they give composes as in form C. */
 static int bdfi_normalize(const char *s, size_t n, int compat, char **out, size_t *out_len) {
@@ -351,55 +443,14 @@ static int bdfi_normalize(const char *s, size_t n, int compat, char **out, size_
       len = 1;
     }
     i += len;
-    size_t m = 0;
-    const uint32_t *seq = compat ? bdfi_nfkd_of(c, &m) : NULL;
-    if (!seq) {
-      seq = bdfi_nfd_of(c, &m);
-    }
-    if (seq) {
-      for (size_t k = 0; k < m; k++) {
-        if (bdfi_cps_push(&d, seq[k]) < 0) {
-          goto done;
-        }
-      }
-    } else if (c >= BDFI_HANGUL_S && c < BDFI_HANGUL_S + BDFI_HANGUL_SCOUNT) {
-      uint32_t si = c - BDFI_HANGUL_S;
-      uint32_t t = si % BDFI_HANGUL_TCOUNT;
-      if (bdfi_cps_push(&d, BDFI_HANGUL_L + si / BDFI_HANGUL_NCOUNT) < 0 ||
-          bdfi_cps_push(&d, BDFI_HANGUL_V + (si % BDFI_HANGUL_NCOUNT) / BDFI_HANGUL_TCOUNT) < 0 ||
-          (t != 0 && bdfi_cps_push(&d, BDFI_HANGUL_T + t) < 0)) {
-        goto done;
-      }
-    } else if (bdfi_cps_push(&d, c) < 0) {
+    if (bdfi_decompose(&d, c, compat) < 0) {
       goto done;
     }
   }
   if (bdfi_reorder(&d) < 0) {
     goto done;
   }
-
-  /* compose, in place: a character composes with the last starter unless a
-   * character between them blocks it (one of class 0, or of its class or a
-   * higher one) */
-  size_t k = 0;
-  size_t starter = SIZE_MAX;
-  uint8_t last_cc = 0;
-  for (size_t i = 0; i < d.n; i++) {
-    uint32_t c = d.c[i];
-    uint8_t cc = d.cc[i];
-    if (starter != SIZE_MAX && (k == starter + 1 || (last_cc != 0 && last_cc < cc))) {
-      uint32_t composite = bdfi_compose_pair(d.c[starter], c);
-      if (composite) {
-        d.c[starter] = composite;
-        continue;
-      }
-    }
-    if (cc == 0) {
-      starter = k;
-    }
-    last_cc = cc;
-    d.c[k++] = c;
-  }
+  size_t k = bdfi_compose(&d);
 
   /* encode */
   {

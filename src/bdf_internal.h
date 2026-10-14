@@ -66,6 +66,11 @@ BDF_INTERNAL float bdfi_rd_f32(bdfi_reader *r);
 BDF_INTERNAL uint64_t bdfi_rd_varuint(bdfi_reader *r);
 /* bdfi_rd_bytes returns n bytes at the position, or NULL after a failure. */
 BDF_INTERNAL const uint8_t *bdfi_rd_bytes(bdfi_reader *r, size_t n);
+/* bdfi_rd_string reads a string of a part, its length and its bytes: the
+ * bytes and in *len how many, or NULL after a failure. A byte order mark at
+ * the start is no part of the string (spec §6): it is passed over, as the
+ * reference's readers pass it, the one in Go and the decoder of the viewer. */
+BDF_INTERNAL const uint8_t *bdfi_rd_string(bdfi_reader *r, size_t *len);
 /* bdfi_error_from_reader fills err from the reader's failure. */
 BDF_INTERNAL void bdfi_error_from_reader(bdf_error *err, const bdfi_reader *r);
 
@@ -429,6 +434,28 @@ BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, cons
 BDF_INTERNAL int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len);
 /* bdfi_nfkc does the same for form KC. */
 BDF_INTERNAL int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len);
+/* Characters, with the combining class of each: what normalisation works
+ * on. */
+typedef struct bdfi_points {
+  uint32_t *c;
+  uint8_t *cc;
+  size_t n, cap;
+} bdfi_points;
+/* bdfi_nfkc_points leaves in w the form KC of n characters (w->c, w->n): 0,
+ * or -1 when out of memory. w is the caller's, zeroed before its first use
+ * and kept from call to call; its c and cc are freed when it is done. */
+BDF_INTERNAL int bdfi_nfkc_points(bdfi_points *w, const uint32_t *in, size_t n);
+/* bdfi_is_mark reports a combining mark (the general categories Mn, Mc and
+ * Me: \p{M} of a regular expression). */
+BDF_INTERNAL int bdfi_is_mark(uint32_t c);
+/* bdfi_nfkc_alone reports a character that form KC leaves as it is and that
+ * joins nothing before it by itself: it has no decomposition, its combining
+ * class is 0, and it is no mark. After text in form KC it is the text and
+ * the character, unless it composes with the last character of the text
+ * (bdfi_composes: the letters of a Hangul syllable, a vowel sign of two
+ * parts). */
+BDF_INTERNAL int bdfi_nfkc_alone(uint32_t c);
+BDF_INTERNAL int bdfi_composes(uint32_t a, uint32_t b);
 BDF_INTERNAL uint32_t bdfi_to_lower(uint32_t c);
 BDF_INTERNAL int bdfi_bidi_direction(uint32_t c);
 BDF_INTERNAL uint32_t bdfi_utf8_rune(const char *s, size_t n, size_t *len);

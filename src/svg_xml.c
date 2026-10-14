@@ -693,11 +693,12 @@ static int bdfi_xml_entity_name_byte(uint8_t c) {
  * document stand for more than BDFI_XML_MAX_ENTITY_TEXT, all their
  * references together, by the count of the reference: every "<!ENTITY"
  * counts, wherever it is, with the largest value of its name, and every
- * "&name;". It returns 0, or -1 when out of memory.
+ * "&name;" of a name the reader takes for one. It returns 0, or -1 when out
+ * of memory.
  */
 static int bdfi_xml_bound_entities(const uint8_t *data, size_t n, int *dropped) {
   bdfi_xml_entity_size *sizes = NULL;
-  size_t count = 0, cap = 0, longest = 0;
+  size_t count = 0, cap = 0;
   /* the next quote of each kind, so that declarations without an end do
    * not each look through the rest of the document */
   size_t quote_from[2] = {0, 0}, quote_at[2] = {0, 0};
@@ -746,9 +747,6 @@ static int bdfi_xml_bound_entities(const uint8_t *data, size_t n, int *dropped) 
     sizes[count].name = bdfi_svg_str_of((const char *)data + start, name_len);
     sizes[count].size = quote_at[q] - (i + 1);
     count++;
-    if (name_len > longest) {
-      longest = name_len;
-    }
   }
   if (count == 0) {
     free(sizes);
@@ -782,9 +780,10 @@ static int bdfi_xml_bound_entities(const uint8_t *data, size_t n, int *dropped) 
     if (semi == BDFI_XML_NONE_AT) {
       break; /* no reference ends after here */
     }
-    /* j := bytes.IndexByte(rest[:min(len(rest), longest+1)], ';'); j > 0 */
+    /* a name of maxEntityName bytes at most: the reader takes nothing longer
+     * for a reference */
     size_t j = semi - rest;
-    if (j == 0 || j > longest) {
+    if (j == 0 || j > BDFI_XML_MAX_ENTITY_NAME) {
       continue;
     }
     bdfi_svg_str name = bdfi_svg_str_of((const char *)data + rest, j);
@@ -817,38 +816,6 @@ static void bdfi_xml_drop_entities(uint8_t *data, size_t n) {
   for (size_t at = bdfi_xml_index(data, 0, n, "<!ENTITY", 8); at != BDFI_XML_NONE_AT;
        at = bdfi_xml_index(data, at + 8, n, "<!ENTITY", 8)) {
     memcpy(data + at, "<!entity", 8);
-  }
-}
-
-/* undeclare in open.go: the XML declarations in the rest of a document that
- * was converted become processing instructions of another name. Comments
- * and CDATA sections are passed over. */
-static void bdfi_xml_undeclare(uint8_t *b, size_t n) {
-  if (bdfi_xml_index(b, 0, n, "<?xml", 5) == BDFI_XML_NONE_AT) {
-    return;
-  }
-  int no_comment_end = 0, no_cdata_end = 0;
-  size_t i = 0;
-  for (;;) {
-    i = bdfi_xml_index_byte(b, i, n, '<');
-    if (i == BDFI_XML_NONE_AT) {
-      return;
-    }
-    size_t left = n - i;
-    if (left >= 4 && memcmp(b + i, "<!--", 4) == 0) {
-      size_t end = no_comment_end ? BDFI_XML_NONE_AT : bdfi_xml_index(b, i + 4, n, "-->", 3);
-      no_comment_end = end == BDFI_XML_NONE_AT;
-      i = no_comment_end ? i + 4 : end + 3;
-    } else if (left >= 9 && memcmp(b + i, "<![CDATA[", 9) == 0) {
-      size_t end = no_cdata_end ? BDFI_XML_NONE_AT : bdfi_xml_index(b, i + 9, n, "]]>", 3);
-      no_cdata_end = end == BDFI_XML_NONE_AT;
-      i = no_cdata_end ? i + 9 : end + 3;
-    } else if (left > 5 && memcmp(b + i, "<?xml", 5) == 0 && bdfi_xml_is_space(b[i + 5])) {
-      b[i + 4] = 'L';
-      i += 5;
-    } else {
-      i++;
-    }
   }
 }
 
@@ -901,6 +868,7 @@ int bdfi_xml_open(bdfi_xml_reader *r, const uint8_t *data, size_t len, size_t ma
   memset(r, 0, sizeof *r);
   bdfi_arena_init(&r->ent_arena);
   r->max_depth = max_depth;
+  r->prolog = 1;
   r->buf = len > 0 ? data : (const uint8_t *)"";
   r->w = len;
   r->marked =
@@ -1351,18 +1319,32 @@ static int bdfi_xml_is_predefined(const uint8_t *name, size_t n) {
          (n == 4 && (memcmp(name, "apos", 4) == 0 || memcmp(name, "quot", 4) == 0));
 }
 
+/* The order the declarations of a DOCTYPE are kept in: by name, a name
+ * declared more than once in the order of its declarations (the sort is a
+ * stable one). */
+static int bdfi_xml_entity_cmp(const void *a, const void *b) {
+  return bdfi_svg_str_cmp(((const bdfi_xml_entity *)a)->name, ((const bdfi_xml_entity *)b)->name);
+}
+
 /* Reader.lookupEntity: the DOCTYPE's declarations, the first of which wins,
- * and then htmlentity.Lookup. *declared says which it was. */
+ * and then htmlentity.Lookup. A name is found by halving: a document may
+ * declare as many entities as it has room for and refer to them as often. */
 static int bdfi_xml_lookup_entity(const bdfi_xml_reader *r, const uint8_t *name, size_t n,
-                                  bdfi_svg_str *value, int *declared) {
-  for (size_t i = 0; i < r->nents; i++) {
-    if (bdfi_svg_str_eq(r->ents[i].name, (const char *)name, n)) {
-      *value = r->ents[i].value;
-      *declared = 1;
-      return 1;
+                                  bdfi_svg_str *value) {
+  bdfi_svg_str want = bdfi_svg_str_of((const char *)name, n);
+  size_t first = 0, last = r->nents;
+  while (first < last) {
+    size_t m = first + (last - first) / 2;
+    if (bdfi_svg_str_cmp(r->ents[m].name, want) < 0) {
+      first = m + 1;
+    } else {
+      last = m;
     }
   }
-  *declared = 0;
+  if (first < r->nents && bdfi_svg_str_cmp(r->ents[first].name, want) == 0) {
+    *value = r->ents[first].value;
+    return 1;
+  }
   size_t lo = 0, hi = sizeof bdfi_xml_html_entities / sizeof bdfi_xml_html_entities[0];
   while (lo < hi) {
     size_t m = lo + (hi - lo) / 2;
@@ -1407,7 +1389,6 @@ static int bdfi_xml_expand(bdfi_xml_reader *r, const uint8_t *src, size_t n, int
       j++;
     }
     bdfi_svg_str value;
-    int declared;
     if (j == 1 || a + j >= n || src[a + j] != ';' || bdfi_xml_is_predefined(src + a + 1, j - 1)) {
       if (bdfi_xml_buf_byte(dst, '&') != 0) {
         return BDFI_XML_NOMEM;
@@ -1415,9 +1396,9 @@ static int bdfi_xml_expand(bdfi_xml_reader *r, const uint8_t *src, size_t n, int
       i = a + 1;
       continue;
     }
-    if (bdfi_xml_lookup_entity(r, src + a + 1, j - 1, &value, &declared)) {
+    if (bdfi_xml_lookup_entity(r, src + a + 1, j - 1, &value)) {
       /* appendEscaped */
-      size_t from = 0;
+      size_t from = 0, before = dst->n;
       for (size_t k = 0; k < value.n; k++) {
         if (value.p[k] != '&' && value.p[k] != '\r') {
           continue;
@@ -1432,17 +1413,13 @@ static int bdfi_xml_expand(bdfi_xml_reader *r, const uint8_t *src, size_t n, int
         return BDFI_XML_NOMEM;
       }
       *changed = 1;
-      if (dst->n > r->max_buffer) {
-        return BDFI_XML_STOP; /* ErrTooLarge */
+      /* what the value added over the reference it stands for, counted for
+       * the document as a whole */
+      if (dst->n - before > j + 1) {
+        r->grown += (uint64_t)(dst->n - before - (j + 1));
       }
-      /* Not in the reference: the megabyte its BoundEntities counts is a
-       * bound here whatever the encodings of a document hide from the
-       * count. */
-      if (declared) {
-        r->ent_text += value.n;
-        if (r->ent_text > BDFI_XML_MAX_ENTITY_TEXT) {
-          return BDFI_XML_ENTITIES;
-        }
+      if (dst->n > r->max_buffer || r->grown > r->max_buffer) {
+        return BDFI_XML_STOP; /* ErrTooLarge */
       }
     } else if (bdfi_xml_buf_append(dst, src + a, j + 1) != 0) {
       return BDFI_XML_NOMEM;
@@ -1801,6 +1778,7 @@ static int bdfi_xml_scan_start_tag(bdfi_xml_reader *r, int *kind) {
   }
   r->name_off = r->r + 1;
   r->name_len = name_len;
+  r->prolog = 0;
   if (!self_close && bdfi_xml_auto_close(b + r->name_off, name_len)) {
     /* a void element ends here unless its own end tag follows */
     self_close = bdfi_xml_peek_not_end_tag(r, i + 1, name_len);
@@ -1936,7 +1914,13 @@ static int bdfi_xml_scan_proc_inst(bdfi_xml_reader *r, int *kind) {
   if (close == BDFI_XML_NONE_AT) {
     return BDFI_XML_STOP;
   }
-  int is_decl = end - (r->r + 2) == 3 && memcmp(r->buf + r->r + 2, "xml", 3) == 0;
+  /* Only the first <?xml ...?>, and only before the root element, is the
+   * declaration: a later one is a processing instruction and nothing more. */
+  int is_decl = end - (r->r + 2) == 3 && memcmp(r->buf + r->r + 2, "xml", 3) == 0 &&
+                !r->decl_seen && r->prolog;
+  if (is_decl) {
+    r->decl_seen = 1;
+  }
   bdfi_svg_str enc;
   if (is_decl && bdfi_xml_decl_attr(r->buf + end, close - end, "encoding", 8, &enc)) {
     /* Value.EqualFold("utf-8"), of the value as written */
@@ -2040,12 +2024,17 @@ static int bdfi_xml_scan_bang(bdfi_xml_reader *r, int *kind) {
     return BDFI_XML_OK;
   }
   if (bdfi_xml_has_prefix(r, r->r, "<!DOCTYPE", 9)) {
+    if (!r->prolog || r->doctype_seen) {
+      return BDFI_XML_STOP; /* DOCTYPE after the root element; second DOCTYPE */
+    }
+    r->doctype_seen = 1;
     size_t end = 0, sub_start, sub_end;
     if (bdfi_xml_scan_doctype(r, &end, &sub_start, &sub_end) != BDFI_XML_OK) {
       return BDFI_XML_STOP;
     }
     if (sub_start != BDFI_XML_NONE_AT && sub_end != BDFI_XML_NONE_AT && sub_end > sub_start &&
-        bdfi_xml_declare_entities(r, r->buf + sub_start, sub_end - sub_start) != 0) {
+        (bdfi_xml_declare_entities(r, r->buf + sub_start, sub_end - sub_start) != 0 ||
+         bdfi_svg_sort(r->ents, r->nents, sizeof *r->ents, bdfi_xml_entity_cmp) != 0)) {
       return BDFI_XML_NOMEM;
     }
     r->text_off = r->r + 9;
@@ -2090,9 +2079,6 @@ static int bdfi_xml_scan_text(bdfi_xml_reader *r, int *kind) {
  * and read on. A second declaration that asks for it is an error.
  */
 static int bdfi_xml_switch_charset(bdfi_xml_reader *r) {
-  if (r->switched) {
-    return BDFI_XML_STOP; /* errDeclarations */
-  }
   r->switched = 1;
   const uint8_t *rest = r->buf + r->r;
   size_t n = r->w - r->r;
@@ -2150,7 +2136,6 @@ static int bdfi_xml_switch_charset(bdfi_xml_reader *r) {
   if (bdfi_xml_bound(r) != 0) {
     return BDFI_XML_NOMEM;
   }
-  bdfi_xml_undeclare(r->owned, r->w);
   return BDFI_XML_OK;
 }
 

@@ -147,6 +147,21 @@ const uint8_t *bdfi_rd_bytes(bdfi_reader *r, size_t n) {
   return p;
 }
 
+const uint8_t *bdfi_rd_string(bdfi_reader *r, size_t *len) {
+  size_t n = bdfi_rd_count(r, 1, "bad string length");
+  const uint8_t *p = bdfi_rd_bytes(r, n);
+  *len = 0;
+  if (r->failed || !p) {
+    return NULL;
+  }
+  if (n >= 3 && p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) {
+    p += 3; /* one mark, as a decoder drops one */
+    n -= 3;
+  }
+  *len = n;
+  return p;
+}
+
 /* ---- Memory ------------------------------------------------------------- */
 
 void *bdfi_alloc_items(size_t n, size_t size, int *oom) {

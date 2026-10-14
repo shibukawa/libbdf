@@ -27,7 +27,7 @@ var smallLimits = &svg.Options{MaxDepth: 40, MaxNodes: 2000, MaxStyleMatches: 20
 
 // known counts the documents the C reader refuses on purpose where the
 // reference reads them.
-var known struct{ encoding, entities int }
+var known struct{ encoding int }
 
 var declaredLabel = regexp.MustCompile(`^\s*=\s*(?:"([^"]*)"|'([^']*)')`)
 
@@ -76,19 +76,9 @@ func compare(data []byte, opts *svg.Options) string {
 	if g == c {
 		return ""
 	}
-	switch c {
-	case "encoding\n":
-		if declaresOtherEncoding(data) {
-			known.encoding++
-			return ""
-		}
-	case "entities\n":
-		// the megabyte of entity text is a bound of the C reader whatever
-		// encodings hide from the reference's count
-		if bytes.Contains(data, []byte("<!ENTITY")) && bytes.Contains(data, []byte("<?xml")) {
-			known.entities++
-			return ""
-		}
+	if c == "encoding\n" && declaresOtherEncoding(data) {
+		known.encoding++
+		return ""
 	}
 	return difference(g, c)
 }
@@ -289,8 +279,8 @@ func checkMutations(t *testing.T, in map[string][]byte) {
 			os.WriteFile(filepath.Join(dir, fmt.Sprintf("svg-%d-%d", seed, i)), data, 0o644)
 		}
 	}
-	t.Logf("seed %d: %d damaged documents, %d of them still SVG the reference reads, %d disagreements; refused by the C reader alone: %d for their encoding, %d for their entities",
-		seed, cases, docs, failed, known.encoding-before.encoding, known.entities-before.entities)
+	t.Logf("seed %d: %d damaged documents, %d of them still SVG the reference reads, %d disagreements; refused by the C reader alone for their encoding: %d",
+		seed, cases, docs, failed, known.encoding-before.encoding)
 }
 
 // documentSVGs is the SVG image parts of the reference's test documents.
