@@ -301,7 +301,7 @@ typedef struct bdf_view {
   /* sheets */
   float tile;        /* the tile size: as stated, or BDF_DEFAULT_TILE */
   float tile_stated; /* as stated; 0 when none */
-  size_t ncols, nrows;
+  size_t ncols, nrows; /* the runs of columns and of rows (bdf_doc_view_run), not their number */
   int has_freeze;
   int64_t freeze_cols, freeze_rows;
   int gridlines;

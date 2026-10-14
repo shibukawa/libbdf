@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>dotnet-thumbnails</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- libbdf for .NET from this checkout. A project of your own takes the
+         NuGet packages instead: LibBdf and LibBdf.SkiaSharp. -->
+    <ProjectReference Include="../../dotnet/LibBdf/LibBdf.csproj" />
+    <ProjectReference Include="../../dotnet/LibBdf.SkiaSharp/LibBdf.SkiaSharp.csproj" />
+    <!-- Skia's own library on Linux (SkiaSharp brings it on macOS and Windows) -->
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
+  </ItemGroup>
+</Project>

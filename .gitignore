@@ -20,3 +20,9 @@ timeout-*
 /.build/
 /.swiftpm/
 /dotnet/LibBdf/runtimes/
+# what the examples build and write where they are run
+/examples/*/build/
+/examples/*/.build/
+/examples/*/bin/
+/examples/*/obj/
+/examples/*/thumbnails*/
