@@ -12,5 +12,6 @@
     <ProjectReference Include="../LibBdf/LibBdf.csproj" />
     <ProjectReference Include="../LibBdf.SkiaSharp/LibBdf.SkiaSharp.csproj" />
     <None Include="../../samples/two-pages.bdf" Link="two-pages.bdf" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../samples/sheet.bdf" Link="sheet.bdf" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -3,11 +3,14 @@
 // canvas Avalonia draws its window with.
 //
 //   dotnet run -- doc.bdf
-//   dotnet run -- doc.bdf --snapshot page.png [--page N]   (a page, without a screen)
+//   dotnet run -- doc.bdf --snapshot page.png [--page N]   (a page, or the top left
+//                                                          of a sheet, without a screen)
+//   dotnet run -- doc.bdf --snapshot window.png --window   (the window as it opens)
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Avalonia.Themes.Fluent;
 using AvaloniaViewer;
 using LibBdf;
@@ -16,6 +19,10 @@ string? path = args.FirstOrDefault(a => !a.StartsWith("--"));
 int snapshot = Array.IndexOf(args, "--snapshot");
 if (snapshot >= 0 && snapshot + 1 < args.Length && path != null)
 {
+    if (args.Contains("--window"))
+    {
+        return Snapshot.Window(path, args[snapshot + 1]);
+    }
     int at = Array.IndexOf(args, "--page");
     int page = at >= 0 && at + 1 < args.Length ? int.Parse(args[at + 1]) - 1 : 0;
     return Snapshot.Write(path, args[snapshot + 1], page);
@@ -46,11 +53,33 @@ namespace AvaloniaViewer
     /// </summary>
     public static class Snapshot
     {
-        public static int Write(string path, string output, int page)
-        {
+        private static void Setup() =>
             AppBuilder.Configure(() => new App(null)).UseSkia()
                 .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
                 .SetupWithoutStarting();
+
+        /// <summary>The window, as it shows the document when it opens.</summary>
+        public static int Window(string path, string output)
+        {
+            Setup();
+            var window = new MainWindow(path);
+            window.Show();
+            Dispatcher.UIThread.RunJobs(); // it opens the document when it is shown
+            var frame = window.CaptureRenderedFrame();
+            if (frame == null)
+            {
+                Console.Error.WriteLine($"{path}: the window was not drawn");
+                return 1;
+            }
+            frame.Save(output, new PngBitmapEncoderOptions());
+            Console.WriteLine($"{output}: {frame.PixelSize.Width} × {frame.PixelSize.Height}");
+            window.Close();
+            return 0;
+        }
+
+        public static int Write(string path, string output, int page)
+        {
+            Setup();
             try
             {
                 var document = new BdfDocument(File.ReadAllBytes(path));
@@ -61,16 +90,19 @@ namespace AvaloniaViewer
                 using var viewer = new Viewer(document);
                 if (viewer.Views.Count == 0)
                 {
-                    Console.Error.WriteLine($"{path}: no view with pages");
+                    Console.Error.WriteLine($"{path}: no view with pages, and no sheet");
                     return 1;
                 }
-                int view = viewer.Views[0].Index;
-                var size = document.PageSize(page, view) ?? (0, 0);
+                var (view, info) = viewer.Views[0];
+                bool sheet = info.Kind == BdfViewKind.Sheet;
+                var size = viewer.Size(view, page) ?? (0, 0);
                 var control = new PageView();
-                control.Show(viewer.Skia, new Size(size.Width, size.Height), view, page, 2);
+                control.Show(viewer.Skia, new Size(size.Width, size.Height), view, page, sheet, 2);
                 control.Measure(Size.Infinity);
                 control.Arrange(new Rect(control.DesiredSize));
-                var pixels = new PixelSize((int)Math.Ceiling(control.DesiredSize.Width), (int)Math.Ceiling(control.DesiredSize.Height));
+                // (of a large sheet, only what fits in 2000 pixels each way)
+                var pixels = new PixelSize((int)Math.Min(2000, Math.Ceiling(control.DesiredSize.Width)),
+                    (int)Math.Min(2000, Math.Ceiling(control.DesiredSize.Height)));
                 using var bitmap = new RenderTargetBitmap(pixels);
                 bitmap.Render(control);
                 bitmap.Save(output, new PngBitmapEncoderOptions());

@@ -295,9 +295,12 @@ C だけのテスト（`tests/test_render.c`）は、手で画素を言える描
 アダプタは「core の命令列をフレームワークのキャンバスに流す薄い層」（§2）だが、命令列をそのまま渡すと薄くならない。SAVE と RESTORE がグループやマスクをまたぐときの扱い、USE の再帰と上限、パターンと画像のデコード、フォントの選択とテキストの配置、ソフトマスクは、どれも形式の知識で、アダプタごとに書けば 4 回書くことになり、4 通りに間違える。そこで core に**プレイヤー**（`src/rcanvas.c`）を置いた。プレイヤーは命令列をラスタライザ（`rdraw.c`）と同じ順序と上限で実行し、描くところだけを `bdf_canvas` の関数表に渡す。アダプタはその表を埋めるだけで、cairo が 450 行、Core Graphics が 500 行ほどになる。
 
 ```
-bdf_play_page(renderer, view, page, scale, &canvas, &err)   ページ、スクロール ビューの帯
-bdf_play_part(renderer, hash, scale, &canvas, &err)         Object パート 1 つ（シートのタイル）
+bdf_play_page(renderer, view, page, scale, &canvas, &err)            ページ、スクロール ビューの帯
+bdf_play_region(renderer, view, page, region, scale, &canvas, &err)  ビューの矩形（ページ、帯を積んだもの、シート）
+bdf_play_part(renderer, hash, scale, &canvas, &err)                  Object パート 1 つ
 ```
+
+`bdf_play_region` は `bdf_render_region` のキャンバス版で、矩形の左上をキャンバスの原点に置き、矩形の外には何も描かない。シートでは罫線とタイルをラスタライザと同じ順で渡す。罫線の位置と本数の上限、どのタイルをどの順で描くかは `render.c` の `bdfi_grid_walk` と `bdfi_sheet_tiles` をラスタライザと共有している。罫線はラスタライザと同じく、原点から数えたデバイス ピクセルに丸めた幅 1 ピクセルの矩形で、全部を 1 本のパスにして `fill` に 1 回で渡す（ラスタライザは同じ画素に重なった線を色が変わらなくなるまで描き直すが、1 回の塗りでは重なりは 1 回しか塗られないので、端の部分的な画素がわずかに薄いだけになる）。原点がデバイス ピクセルの境目にないと罫線が 2 画素にまたがってぼやけるので、ビューアは見えている範囲の左上を整数ピクセルに合わせて渡す（qt-viewer と avalonia-viewer）。背景は描かない（`bdf_play_page` と同じく、紙は呼び出し側のもの）。アダプタの比較プログラムは、組み込みのページに加えて、そのうち 4 枚をタイルにしたシートの範囲をラスタライザと比べる。
 
 **キャンバスに来るもの**。2D ライブラリがどれも名前を持っているものだけである。
 

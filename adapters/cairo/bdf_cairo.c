@@ -545,6 +545,14 @@ bdf_status bdf_cairo_draw_page(bdf_cairo *bc, size_t view, size_t page, cairo_t 
   return bdf_play_page(bc->renderer, view, page, bdf_cairo_scale(cr), &canvas, err);
 }
 
+bdf_status bdf_cairo_draw_region(bdf_cairo *bc, size_t view, size_t page, const float region[4],
+                                 cairo_t *cr, bdf_error *err) {
+  bdf_canvas canvas;
+  bdf_cairo_canvas(bc, cr, &canvas);
+  bc->nlayers = 0;
+  return bdf_play_region(bc->renderer, view, page, region, bdf_cairo_scale(cr), &canvas, err);
+}
+
 bdf_status bdf_cairo_draw_part(bdf_cairo *bc, const uint8_t hash[16], cairo_t *cr, bdf_error *err) {
   bdf_canvas canvas;
   bdf_cairo_canvas(bc, cr, &canvas);

@@ -1244,6 +1244,19 @@ BDF_API bdf_status bdf_play_page(bdf_renderer *renderer, size_t view, size_t pag
  * object's own coordinates and without a clip: a tile of a sheet, a master. */
 BDF_API bdf_status bdf_play_part(bdf_renderer *renderer, const uint8_t hash[16], double scale,
                                  const bdf_canvas *canvas, bdf_error *err);
+/*
+ * bdf_play_region draws a rectangle (x, y, w, h in units) of a view through
+ * canvas, as bdf_render_region draws it into pixels: of a page of a fixed
+ * or flow view, of the continuous layout of a scroll view, or of a sheet
+ * with its gridlines (page is ignored in the last two). The corner of the
+ * rectangle is at the origin of the canvas and nothing is drawn outside
+ * it; the background is the canvas's to paint. scale is the device pixels
+ * a unit takes on the canvas: the gridlines are a device pixel wide, on
+ * whole pixels from the origin.
+ */
+BDF_API bdf_status bdf_play_region(bdf_renderer *renderer, size_t view, size_t page,
+                                   const float region[4], double scale, const bdf_canvas *canvas,
+                                   bdf_error *err);
 
 /* ---- Cue index (spec §4.4) ---------------------------------------------- */
 

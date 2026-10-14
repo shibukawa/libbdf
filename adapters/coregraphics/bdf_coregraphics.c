@@ -550,6 +550,13 @@ bdf_status bdf_cg_draw_page(bdf_cg *cg, size_t view, size_t page, CGContextRef c
   return bdf_play_page(cg->renderer, view, page, bdf_cg_scale(cg), &canvas, err);
 }
 
+bdf_status bdf_cg_draw_region(bdf_cg *cg, size_t view, size_t page, const float region[4],
+                              CGContextRef ctx, bdf_error *err) {
+  bdf_canvas canvas;
+  bdf_cg_canvas(cg, ctx, &canvas);
+  return bdf_play_region(cg->renderer, view, page, region, bdf_cg_scale(cg), &canvas, err);
+}
+
 bdf_status bdf_cg_draw_part(bdf_cg *cg, const uint8_t hash[16], CGContextRef ctx, bdf_error *err) {
   bdf_canvas canvas;
   bdf_cg_canvas(cg, ctx, &canvas);

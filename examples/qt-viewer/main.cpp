@@ -2,13 +2,17 @@
  * A viewer of BDF documents with Qt Widgets, drawing through QPainter:
  * libbdf runs the instructions of a page, and the Qt adapter hands what
  * they draw to QPainter (QPainterPath, gradients, QImage, composition
- * modes). The same call draws on a QImage, a QPdfWriter or a printer.
+ * modes). The same call draws on a QImage, a QPdfWriter or a printer. A
+ * sheet (a spreadsheet, a table of Parquet) is drawn only where it is in
+ * sight, with its gridlines.
  *
- *   qt-viewer doc.bdf [--password P] [--font FILE]...
+ *   qt-viewer doc.bdf [--password P] [--font FILE]... [--pdf FILE | --png FILE]
  *
  * Keys: → ← (or Page Down, Page Up, Space) next and previous page, Home and
- * End, + − zoom, 0 fit, V next view, Ctrl+S save the page as a PDF file.
+ * End, + − zoom, 0 fit, V next view, Ctrl+S save the page as a PDF file. On
+ * a sheet the arrows and the page keys scroll.
  */
+#include <QAbstractScrollArea>
 #include <QAction>
 #include <QApplication>
 #include <QCommandLineParser>
@@ -19,10 +23,11 @@
 #include <QPageSize>
 #include <QPainter>
 #include <QPdfWriter>
+#include <QScrollBar>
 #include <QStatusBar>
-#include <QWidget>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -48,15 +53,16 @@ struct Document {
   }
 };
 
-bool hasPages(const bdf_view &v) { return v.npages > 0 && v.kind_code != BDF_VIEW_SHEET; }
+bool isSheet(const bdf_view &v) { return v.kind_code == BDF_VIEW_SHEET; }
+bool hasPages(const bdf_view &v) { return v.npages > 0 && !isSheet(v); }
 
-class PageView : public QWidget {
+class PageView : public QAbstractScrollArea {
 public:
   explicit PageView(Document &d, QStatusBar *status) : d_(d), status_(status) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(320, 240);
     view_ = bdf_doc_view_count(d_.doc.doc) - 1;
-    nextView(1); // the first view with pages
+    nextView(1); // the first view with pages, or a sheet
   }
 
   // Draws the current page on a painter whose unit is a point.
@@ -69,110 +75,207 @@ public:
     return true;
   }
 
-  bool pageSize(QSizeF &size) const {
-    bdf_page page;
-    if (!hasPages(info_) || bdf_doc_page(d_.doc.doc, view_, page_, &page) != BDF_OK ||
-        page.w <= 0 || page.h <= 0) {
+  // Draws a rectangle of the current sheet, with its corner at the origin
+  // of the painter.
+  bool drawRegion(QPainter &p, const QRectF &region) {
+    const float r[4] = {float(region.x()), float(region.y()), float(region.width()),
+                        float(region.height())};
+    bdf_error err;
+    if (bdf_qt_draw_region(d_.qt, view_, 0, r, &p, &err) != BDF_OK) {
+      std::fprintf(stderr, "sheet: %s\n", err.message);
       return false;
     }
-    size = QSizeF(page.w, page.h);
     return true;
   }
 
-  // The page as a PDF file: QPainter draws the same paths on it, as vectors.
+  // The size of the current page, or of the sheet, in its units.
+  bool contentSize(QSizeF &size) const {
+    bdf_page page;
+    if (isSheet(info_)) {
+      double w, h;
+      bdf_sheet_size(d_.doc.doc, view_, &w, &h);
+      size = QSizeF(w, h);
+    } else if (hasPages(info_) && bdf_doc_page(d_.doc.doc, view_, page_, &page) == BDF_OK) {
+      size = QSizeF(page.w, page.h);
+    } else {
+      return false;
+    }
+    return size.width() > 0 && size.height() > 0;
+  }
+
+  // The page, or the top left of a sheet, as a PDF file: QPainter draws the
+  // same paths on it, as vectors.
   void savePdf(const QString &file) {
     QSizeF size;
-    if (!pageSize(size)) {
+    if (!contentSize(size)) {
       return;
     }
+    size = size.boundedTo(QSizeF(14400, 14400)); // a page of PDF is 200 inches at most
     QPdfWriter pdf(file);
     pdf.setPageSize(QPageSize(size, QPageSize::Point, QString(), QPageSize::ExactMatch));
     pdf.setPageMargins(QMarginsF(0, 0, 0, 0));
     pdf.setResolution(72); // a unit of the page is a point
     QPainter p(&pdf);
-    drawPage(p);
+    if (isSheet(info_)) {
+      drawRegion(p, QRectF(QPointF(0, 0), size));
+    } else {
+      drawPage(p);
+    }
   }
 
 protected:
   void paintEvent(QPaintEvent *) override {
-    QPainter p(this);
-    p.fillRect(rect(), QColor(0x55, 0x58, 0x5e));
+    QPainter p(viewport());
+    p.fillRect(viewport()->rect(), QColor(0x55, 0x58, 0x5e));
     QSizeF size;
-    if (!pageSize(size)) {
+    if (!contentSize(size)) {
       return;
     }
-    double zoom = zoom_ > 0 ? zoom_ : fitZoom(size);
-    QSizeF shown = size * zoom;
-    p.translate(std::max(12.0, (width() - shown.width()) / 2),
-                std::max(12.0, (height() - shown.height()) / 2));
+    const double zoom = currentZoom(size);
+    p.translate(corner(size * zoom));
     p.scale(zoom, zoom); // a unit of a page is a point
     p.setRenderHint(QPainter::Antialiasing);
     p.setRenderHint(QPainter::SmoothPixmapTransform);
     const QRectF paper(QPointF(0, 0), size);
-    p.fillRect(paper, Qt::white); // the paper is the caller's
+    const QRectF seen = p.transform().inverted().mapRect(QRectF(viewport()->rect())) & paper;
+    if (seen.isEmpty()) {
+      return;
+    }
+    p.fillRect(seen, Qt::white); // the paper is the caller's
     p.setClipRect(paper);
-    drawPage(p);
+    if (!isSheet(info_)) {
+      drawPage(p);
+      return;
+    }
+    // what is in sight of a sheet, which may be far larger than the window,
+    // from a corner on a whole pixel, so that the gridlines are sharp
+    const QTransform t = p.deviceTransform();
+    const double x = (std::floor(t.m11() * seen.left() + t.dx()) - t.dx()) / t.m11();
+    const double y = (std::floor(t.m22() * seen.top() + t.dy()) - t.dy()) / t.m22();
+    p.translate(x, y);
+    drawRegion(p, QRectF(QPointF(x, y), seen.bottomRight()));
   }
+
+  void resizeEvent(QResizeEvent *e) override {
+    QAbstractScrollArea::resizeEvent(e);
+    updateScrollBars();
+  }
+
+  void scrollContentsBy(int, int) override { viewport()->update(); }
 
   void keyPressEvent(QKeyEvent *e) override {
     QSizeF size;
+    const bool sheet = isSheet(info_);
     switch (e->key()) {
     case Qt::Key_Right:
     case Qt::Key_PageDown:
     case Qt::Key_Space:
-      show(view_, page_ + 1);
+      if (sheet) {
+        QAbstractScrollArea::keyPressEvent(e);
+      } else {
+        show(view_, page_ + 1);
+      }
       break;
     case Qt::Key_Left:
     case Qt::Key_PageUp:
-      if (page_ > 0) {
+      if (sheet) {
+        QAbstractScrollArea::keyPressEvent(e);
+      } else if (page_ > 0) {
         show(view_, page_ - 1);
       }
       break;
     case Qt::Key_Home:
-      show(view_, 0);
+      sheet ? verticalScrollBar()->setValue(0) : show(view_, 0);
       break;
     case Qt::Key_End:
-      show(view_, info_.npages ? info_.npages - 1 : 0);
+      sheet ? verticalScrollBar()->setValue(verticalScrollBar()->maximum())
+            : show(view_, info_.npages ? info_.npages - 1 : 0);
       break;
     case Qt::Key_Plus:
     case Qt::Key_Equal:
     case Qt::Key_Minus:
-      if (zoom_ <= 0 && pageSize(size)) {
-        zoom_ = fitZoom(size);
+      if (contentSize(size)) {
+        zoom_ = currentZoom(size) * (e->key() == Qt::Key_Minus ? 0.8 : 1.25);
+        zoom_ = std::clamp(zoom_, 0.05, 32.0);
+        updateScrollBars();
+        viewport()->update();
       }
-      zoom_ *= e->key() == Qt::Key_Minus ? 0.8 : 1.25;
-      update();
       break;
     case Qt::Key_0:
       zoom_ = 0;
-      update();
+      updateScrollBars();
+      viewport()->update();
       break;
     case Qt::Key_V:
       nextView(e->modifiers() & Qt::ShiftModifier ? -1 : 1);
       break;
     default:
-      QWidget::keyPressEvent(e);
+      QAbstractScrollArea::keyPressEvent(e);
     }
   }
 
 private:
-  double fitZoom(const QSizeF &size) const {
-    return std::min((width() - 24) / size.width(), (height() - 24) / size.height());
+  // Pixels a unit: what was chosen, else a page as a whole in the window,
+  // or a sheet as wide as the window (at most twice its size).
+  double currentZoom(const QSizeF &size) const {
+    if (zoom_ > 0) {
+      return zoom_;
+    }
+    const QSize room = viewport()->size();
+    const double across = (room.width() - 24) / size.width();
+    if (isSheet(info_)) {
+      return std::clamp(across, 0.05, 2.0);
+    }
+    return std::max(0.05, std::min(across, (room.height() - 24) / size.height()));
+  }
+
+  // Where the corner of the page or the sheet is in the window: in the
+  // middle when it fits, else where the scroll bars say.
+  QPointF corner(const QSizeF &shown) const {
+    const QSize room = viewport()->size();
+    const double x = shown.width() + 24 <= room.width() ? (room.width() - shown.width()) / 2
+                                                        : 12 - horizontalScrollBar()->value();
+    const double y = shown.height() + 24 <= room.height() ? (room.height() - shown.height()) / 2
+                                                          : 12 - verticalScrollBar()->value();
+    return QPointF(x, y);
+  }
+
+  void updateScrollBars() {
+    QSizeF size;
+    QSizeF shown(0, 0);
+    if (contentSize(size)) {
+      shown = size * currentZoom(size);
+    }
+    const QSize room = viewport()->size();
+    horizontalScrollBar()->setRange(0, std::max(0, int(std::ceil(shown.width() + 24 - room.width()))));
+    horizontalScrollBar()->setPageStep(room.width());
+    horizontalScrollBar()->setSingleStep(24);
+    verticalScrollBar()->setRange(0, std::max(0, int(std::ceil(shown.height() + 24 - room.height()))));
+    verticalScrollBar()->setPageStep(room.height());
+    verticalScrollBar()->setSingleStep(24);
   }
 
   void show(size_t view, size_t page) {
     bdf_view info;
-    if (bdf_doc_view(d_.doc.doc, view, &info) != BDF_OK || page >= info.npages) {
+    if (bdf_doc_view(d_.doc.doc, view, &info) != BDF_OK ||
+        (isSheet(info) ? page != 0 : page >= info.npages)) {
       return;
     }
     view_ = view;
     page_ = page;
     info_ = info;
-    status_->showMessage(QString("%1 — %2 / %3")
-                             .arg(QString::fromUtf8(info.title, int(info.title_len)))
-                             .arg(page + 1)
-                             .arg(info.npages));
-    update();
+    const QString title = QString::fromUtf8(info.title, int(info.title_len));
+    if (isSheet(info)) {
+      double w, h;
+      bdf_sheet_size(d_.doc.doc, view, &w, &h);
+      status_->showMessage(QString("%1 — a sheet of %2 × %3").arg(title).arg(w).arg(h));
+    } else {
+      status_->showMessage(QString("%1 — %2 / %3").arg(title).arg(page + 1).arg(info.npages));
+    }
+    horizontalScrollBar()->setValue(0);
+    verticalScrollBar()->setValue(0);
+    updateScrollBars();
+    viewport()->update();
   }
 
   void nextView(long step) {
@@ -180,7 +283,7 @@ private:
     for (long k = 1; k <= n; k++) {
       size_t i = size_t(((long(view_) + step * k) % n + n) % n);
       bdf_view info;
-      if (bdf_doc_view(d_.doc.doc, i, &info) == BDF_OK && hasPages(info)) {
+      if (bdf_doc_view(d_.doc.doc, i, &info) == BDF_OK && (hasPages(info) || isSheet(info))) {
         show(i, 0);
         return;
       }
@@ -205,10 +308,12 @@ int main(int argc, char **argv) {
   args.addPositionalArgument("file", "a .bdf file, or the directory of the split form");
   QCommandLineOption passwordOption("password", "the password of an encrypted document", "P");
   QCommandLineOption fontOption("font", "a font for text that names its font", "FILE");
-  QCommandLineOption pdfOption("pdf", "write the first page to a PDF file, and quit", "FILE");
+  QCommandLineOption pdfOption("pdf", "write the first page (or the top left of a sheet) to a PDF file, and quit", "FILE");
+  QCommandLineOption pngOption("png", "write what the window shows to a PNG file, and quit", "FILE");
   args.addOption(passwordOption);
   args.addOption(fontOption);
   args.addOption(pdfOption);
+  args.addOption(pngOption);
   args.process(app);
   if (args.positionalArguments().size() != 1) {
     args.showHelp(2);
@@ -260,6 +365,12 @@ int main(int argc, char **argv) {
     }
   });
   window.addAction(save);
+  if (args.isSet(pngOption)) {
+    // (with QT_QPA_PLATFORM=offscreen, without a screen)
+    window.show();
+    QApplication::processEvents();
+    return window.grab().save(args.value(pngOption)) ? 0 : 1;
+  }
   window.show();
   view->setFocus();
   int rc = app.exec();

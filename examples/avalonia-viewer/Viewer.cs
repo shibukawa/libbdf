@@ -28,9 +28,19 @@ public sealed class Viewer : IDisposable
         Skia = new BdfSkiaRenderer(_renderer);
     }
 
-    /// <summary>The views that have pages: not sheets, which are drawn tile by tile.</summary>
+    /// <summary>The views that can be shown: those with pages, and sheets.</summary>
     public IReadOnlyList<(int Index, BdfView View)> Views =>
-        Document.Views.Select((v, i) => (i, v)).Where(x => x.v.Kind != BdfViewKind.Sheet && x.v.PageCount > 0).ToList();
+        Document.Views.Select((v, i) => (i, v)).Where(x => x.v.Kind == BdfViewKind.Sheet || x.v.PageCount > 0).ToList();
+
+    /// <summary>The size of a page of a view, or of a sheet, in its units; null when there is none.</summary>
+    public (double Width, double Height)? Size(int view, int page)
+    {
+        if (Document.SheetSize(view) is { } sheet)
+        {
+            return sheet.Width > 0 && sheet.Height > 0 ? sheet : null;
+        }
+        return Document.PageSize(page, view) is { } p && p.Width > 0 && p.Height > 0 ? (p.Width, p.Height) : null;
+    }
 
     public void Dispose()
     {

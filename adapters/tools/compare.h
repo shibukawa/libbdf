@@ -15,11 +15,13 @@
 extern "C" {
 #endif
 
-/* Draws page of view into premultiplied RGBA pixels of w x h, on white,
- * with sx and sy pixels a unit of the page (bdf_render_page stretches a
- * page to whole pixels, so the two differ a little): 0 when it cannot. */
-typedef int (*bdf_compare_draw)(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx,
-                                double sy, int w, int h, uint8_t *pixels);
+/* Draws page of view, or the region of it (bdf_play_region) when region is
+ * not NULL, into premultiplied RGBA pixels of w x h, on white, with sx and
+ * sy pixels a unit (bdf_render_page stretches a page to whole pixels, so
+ * the two differ a little): 0 when it cannot. */
+typedef int (*bdf_compare_draw)(void *ctx, bdf_renderer *r, size_t view, size_t page,
+                                const float *region, double sx, double sy, int w, int h,
+                                uint8_t *pixels);
 
 /* What an adapter leaves out, which the pages built in then leave out too. */
 enum { BDF_COMPARE_NO_SHADOWS = 1 };
@@ -28,10 +30,11 @@ enum { BDF_COMPARE_NO_SHADOWS = 1 };
  * The main of a comparison program: who [font.ttf ...] [doc.bdf ...]
  *
  * Without documents it compares the pages built into it (shapes, lines,
- * gradients, images, groups, soft masks, text): the test of an adapter.
- * With documents it compares their pages (the first of each view), with
- * the fonts named before them for the text that names its font. It prints
- * a line a page and returns 1 when a page was further apart than the
+ * gradients, images, groups, soft masks, text) and a sheet of them: the
+ * test of an adapter. With documents it compares their pages (the first
+ * of each view) and the top left corner of their sheets, with the fonts
+ * named before them for the text that names its font. It prints a line a
+ * page and returns 1 when a page was further apart than the
  * limits: a mean difference of the bytes above mean_limit (of 255), or
  * more than far_limit of the pixels differing by more than 64 in a
  * channel. With BDF_COMPARE_DUMP set to a directory, the two pictures of

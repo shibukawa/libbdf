@@ -330,8 +330,9 @@ jobs:
           "$tool" info samples/two-pages.bdf
           "$tool" render samples/two-pages.bdf -page 2 -dpi 144 -o page2.png
           "$tool" render samples/two-pages.bdf -region 10,10,50,40 -o region.png
+          "$tool" render samples/sheet.bdf -o sheet.png
           "$tool" text samples/two-pages.bdf
-          test -s page2.png && test -s region.png
+          test -s page2.png && test -s region.png && test -s sheet.png
       - name: single-header
         run: |
           cmake -S examples/single-header -B build/single-header -DCMAKE_BUILD_TYPE=Release
@@ -347,7 +348,8 @@ jobs:
           cmake -S examples/qt-viewer -B build/qt-viewer -DCMAKE_BUILD_TYPE=Release
           cmake --build build/qt-viewer
           QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/two-pages.bdf --pdf page1.pdf
-          test -s page1.pdf
+          QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/sheet.bdf --png qt-sheet.png
+          test -s page1.pdf && test -s qt-sheet.png
       - name: sdl-viewer, swiftui-viewer, qt-viewer
         if: runner.os == 'macOS'
         run: |
@@ -359,7 +361,8 @@ jobs:
           cmake -S examples/qt-viewer -B build/qt-viewer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
           cmake --build build/qt-viewer
           QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/two-pages.bdf --pdf page1-macos.pdf
-          test -s sdl.png && test -s swiftui.png && test -s page1-macos.pdf
+          QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/sheet.bdf --png qt-sheet-macos.png
+          test -s sdl.png && test -s swiftui.png && test -s page1-macos.pdf && test -s qt-sheet-macos.png
       - uses: actions/upload-artifact@v7
         with:
           name: examples-${{ matrix.name }}
@@ -393,14 +396,16 @@ jobs:
         run: |
           export LD_LIBRARY_PATH="$PWD/build"
           dotnet run --project examples/avalonia-viewer -c Release -- samples/two-pages.bdf --snapshot avalonia.png --page 2
-          test -s avalonia.png
+          dotnet run --no-build --project examples/avalonia-viewer -c Release -- samples/sheet.bdf --snapshot avalonia-sheet.png
+          dotnet run --no-build --project examples/avalonia-viewer -c Release -- samples/sheet.bdf --snapshot avalonia-window.png --window
+          test -s avalonia.png && test -s avalonia-sheet.png && test -s avalonia-window.png
       - uses: actions/upload-artifact@v7
         with:
           name: examples-dotnet
           path: |
             thumbnails
             thumbnails-raster
-            avalonia.png
+            avalonia*.png
 
   # libbdf for Android (android/): the AAR of every ABI and the sample app
   # built (the app with R8, as an application of the library runs it), and

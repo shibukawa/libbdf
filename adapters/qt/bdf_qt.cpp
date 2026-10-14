@@ -527,6 +527,13 @@ bdf_status bdf_qt_draw_page(bdf_qt *bq, size_t view, size_t page, QPainter *pain
   });
 }
 
+bdf_status bdf_qt_draw_region(bdf_qt *bq, size_t view, size_t page, const float region[4],
+                              QPainter *painter, bdf_error *err) {
+  return play(bq, painter, err, [&](const bdf_canvas *canvas, double scale) {
+    return bdf_play_region(bq->renderer, view, page, region, scale, canvas, err);
+  });
+}
+
 bdf_status bdf_qt_draw_part(bdf_qt *bq, const uint8_t hash[16], QPainter *painter,
                             bdf_error *err) {
   return play(bq, painter, err, [&](const bdf_canvas *canvas, double scale) {

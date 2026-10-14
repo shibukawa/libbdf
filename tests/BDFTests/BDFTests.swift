@@ -23,6 +23,20 @@ private let twoPages = [
     "yEEAAMhBAAAAAAAAAADbD8lAAAAAAAAAAAAIEP8AoAAiAAA=",
 ].joined()
 
+/// samples/sheet.bdf: a sheet of 5 columns of 60 by 8 rows of 20 with
+/// gridlines, a grey header row and a bar a row from x = 64.
+private let sheet = [
+    "YmRmAAEAAAAgAAAAAAAAAFUBAAAAAAAAAAAAAAAAAAB7ImJkZiI6MSwib3BzZXQiOjEsInVuaXQiOiJwdCIsIm1ldGEiOnsi",
+    "Z2VuZXJhdG9yIjoiYmRmLWdvLzAuMSJ9LCJ2aWV3cyI6W3siaWQiOiJzaGVldDEiLCJraW5kIjoic2hlZXQiLCJ0aXRsZSI6",
+    "IlNoZWV0MSIsInRpbGUiOjUxMiwiY29scyI6W1s1LDYwXV0sInJvd3MiOltbOCwyMF1dLCJncmlkbGluZXMiOnRydWUsInRp",
+    "bGVzIjp7IjAsMCI6IjFhYWYxMjBmYzY1NWM3NjY0YWNmNzE3ZDQ2MTE3MjE4In19XSwicGFydHMiOlt7ImgiOiIxYWFmMTIw",
+    "ZmM2NTVjNzY2NGFjZjcxN2Q0NjExNzIxOCIsInQiOiJvYmoiLCJlbmMiOiJpZGVudGl0eSIsImxlbiI6MjA4LCJzaXplIjoy",
+    "MDgsIm9mZiI6MH1dfUJPQkoBAAAAAAAAAAAAAAAAAJZDAAAgQwAAAAAAALABEP/o6OggAAAAAAAAAAAAAJZDAACgQRD/xHJE",
+    "IAAAgEIAAMBBAADwQQAAQEEQ/zF97SAAAIBCAAAwQgAAcEIAAEBBEP+lpaUgAACAQgAAgEIAALRCAABAQRD/AMD/IAAAgEIA",
+    "AKhCAADwQgAAQEEQ/9WbWyAAAIBCAADQQgAAFkMAAEBBEP9HrXAgAACAQgAA+EIAADRDAABAQRD/eEQmIAAAgEIAABBDAABS",
+    "QwAAQEE="
+].joined()
+
 final class BDFTests: XCTestCase {
     private func document() throws -> BDFDocument {
         try BDFDocument(data: XCTUnwrap(Data(base64Encoded: twoPages)))
@@ -74,6 +88,31 @@ final class BDFTests: XCTestCase {
         XCTAssertEqual(second(5, 5), 0xffff_ffff)
         XCTAssertThrowsError(try renderer.image(page: 2))
         XCTAssertEqual(renderer.warnings, [])
+    }
+
+    func testSheets() throws {
+        let doc = try BDFDocument(data: XCTUnwrap(Data(base64Encoded: sheet)))
+        XCTAssertEqual(doc.views.map(\.kind), [.sheet])
+        XCTAssertEqual(doc.sheetSize(view: 0), CGSize(width: 300, height: 160))
+        XCTAssertNil(try document().sheetSize(view: 0))
+        let renderer = try BDFRenderer(document: doc)
+        let width = 300, height = 160
+        let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 4 * width,
+                                               space: CGColorSpaceCreateDeviceRGB(),
+                                               bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1, y: -1)
+        try renderer.draw(view: 0, region: CGRect(x: 0, y: 0, width: 300, height: 160), in: context)
+        let at = try pixels(of: XCTUnwrap(context.makeImage()))
+        XCTAssertEqual(at(10, 10), 0xe8e8_e8ff) // the header row
+        XCTAssertEqual(at(10, 20), 0xd9d9_d9ff) // the gridline under it
+        XCTAssertEqual(at(60, 30), 0xd9d9_d9ff) // the one after the first column
+        XCTAssertEqual(at(30, 30), 0xffff_ffff)
+        XCTAssertEqual(at(70, 30), 0x4472_c4ff) // the first bar
+        XCTAssertThrowsError(try renderer.draw(view: 0, region: .zero, in: context))
+        XCTAssertTrue(renderer.warnings.isEmpty)
     }
 
     func testCoreGraphics() throws {

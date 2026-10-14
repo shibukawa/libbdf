@@ -468,6 +468,13 @@ bdf_status bdf_skia_draw_page(bdf_skia *bs, size_t view, size_t page, SkCanvas *
   });
 }
 
+bdf_status bdf_skia_draw_region(bdf_skia *bs, size_t view, size_t page, const float region[4],
+                                SkCanvas *canvas, bdf_error *err) {
+  return play(bs, canvas, err, [&](const bdf_canvas *functions, double scale) {
+    return bdf_play_region(bs->renderer, view, page, region, scale, functions, err);
+  });
+}
+
 bdf_status bdf_skia_draw_part(bdf_skia *bs, const uint8_t hash[16], SkCanvas *canvas,
                               bdf_error *err) {
   return play(bs, canvas, err, [&](const bdf_canvas *functions, double scale) {

@@ -9,8 +9,8 @@ using LibBdf;
 namespace AvaloniaViewer;
 
 /// <summary>
-/// The window: a toolbar (open, the view, the pages, zoom) over the page,
-/// which scrolls when it is larger than the window.
+/// The window: a toolbar (open, the view, the pages, zoom) over the page or
+/// the sheet, which scrolls when it is larger than the window.
 /// </summary>
 public sealed class MainWindow : Window
 {
@@ -141,7 +141,7 @@ public sealed class MainWindow : Window
         }
         else if (viewer != null && !IsVisible)
         {
-            _pageView.Show(null, default, 0, 0, 1);
+            _pageView.Show(null, default, 0, 0, false, 1);
             viewer.Dispose();
         }
     }
@@ -162,15 +162,20 @@ public sealed class MainWindow : Window
         Update();
     }
 
+    // A page as a whole in the window, or a sheet as wide as the window (at most twice its size).
     private double FitZoom()
     {
-        var size = _viewer?.Document.PageSize(_page, _view);
-        if (size is not { } s || s.Width <= 0 || s.Height <= 0)
+        if (_viewer?.Size(_view, _page) is not { } s)
         {
             return 1;
         }
         var room = _scroll.Bounds.Size;
-        return Math.Max(0.05, Math.Min((room.Width - 32) / s.Width, (room.Height - 32) / s.Height));
+        double across = (room.Width - 32) / s.Width;
+        if (_viewer.Document.Views[_view].Kind == BdfViewKind.Sheet)
+        {
+            return Math.Clamp(across, 0.05, 2);
+        }
+        return Math.Max(0.05, Math.Min(across, (room.Height - 32) / s.Height));
     }
 
     private void Update()
@@ -181,9 +186,10 @@ public sealed class MainWindow : Window
             return;
         }
         var view = _viewer.Document.Views[_view];
-        var size = _viewer.Document.PageSize(_page, _view) ?? (0, 0);
-        _label.Text = $"{_page + 1} / {view.PageCount}";
-        _pageView.Show(_viewer.Skia, new Size(size.Width, size.Height), _view, _page, _zoom > 0 ? _zoom : FitZoom());
+        var size = _viewer.Size(_view, _page) ?? (0, 0);
+        bool sheet = view.Kind == BdfViewKind.Sheet;
+        _label.Text = sheet ? $"{size.Width:0.#} × {size.Height:0.#}" : $"{_page + 1} / {view.PageCount}";
+        _pageView.Show(_viewer.Skia, new Size(size.Width, size.Height), _view, _page, sheet, _zoom > 0 ? _zoom : FitZoom());
     }
 
     private async Task Message(string text)

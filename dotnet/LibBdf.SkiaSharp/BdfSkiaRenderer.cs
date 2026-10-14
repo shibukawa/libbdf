@@ -46,6 +46,32 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(page));
         }
+        Play(canvas, "a page", (functions, scale, error) =>
+            Native.bdf_play_page(_renderer.Handle, (nuint)view, (nuint)page, scale, functions, error));
+    }
+
+    /// <summary>
+    /// Draws a rectangle of a view, in its units: of a page, of the strips of a scroll view stacked, or of a
+    /// sheet with its gridlines (page is ignored in the last two). The corner of the rectangle is at the origin
+    /// of the canvas, and nothing is drawn outside it. The canvas is left as it was.
+    /// </summary>
+    public void DrawRegion(SKCanvas canvas, SKRect region, int view = 0, int page = 0)
+    {
+        if (page < 0 || view < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(view));
+        }
+        Play(canvas, "a region", (functions, scale, error) =>
+        {
+            float* rect = stackalloc float[4] { region.Left, region.Top, region.Width, region.Height };
+            return Native.bdf_play_region(_renderer.Handle, (nuint)view, (nuint)page, rect, scale, functions, error);
+        });
+    }
+
+    private delegate int Player(Native.Canvas* functions, double scale, Native.Error* error);
+
+    private void Play(SKCanvas canvas, string what, Player play)
+    {
         var self = GCHandle.Alloc(this);
         int depth = canvas.Save();
         try
@@ -69,11 +95,10 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             // the pixels a unit of the canvas is, for what libbdf draws itself
             double det = Math.Abs((double)_base.ScaleX * _base.ScaleY - (double)_base.SkewX * _base.SkewY);
             Native.Error error;
-            int status = Native.bdf_play_page(_renderer.Handle, (nuint)view, (nuint)page, det > 0 ? Math.Sqrt(det) : 1,
-                &functions, &error);
+            int status = play(&functions, det > 0 ? Math.Sqrt(det) : 1, &error);
             if (_failure != null)
             {
-                throw new InvalidOperationException("a page could not be drawn with SkiaSharp", _failure);
+                throw new InvalidOperationException($"{what} could not be drawn with SkiaSharp", _failure);
             }
             BdfException.Check(status, error);
         }

@@ -58,10 +58,89 @@ typedef struct comparison {
   int pages, bad;
 } comparison;
 
-/* The pages of a document (at most max of each view), both ways. */
-static void compare_doc(comparison *c, bdf_doc *doc, const char *name, const bdf_fonts *fonts,
-                        size_t max) {
+/* How far apart the two pictures of a page or a region are. */
+static void compare_pixels(comparison *c, const char *name, const char *what, const uint8_t *one,
+                           const uint8_t *other, int w, int h) {
+  size_t n = (size_t)w * (size_t)h, far = 0;
+  double sum = 0;
+  for (size_t i = 0; i < n; i++) {
+    int worst = 0;
+    for (int k = 0; k < 4; k++) {
+      int d = (int)one[4 * i + k] - (int)other[4 * i + k];
+      d = d < 0 ? -d : d;
+      sum += d;
+      worst = d > worst ? d : worst;
+    }
+    far += worst > 64;
+  }
+  double mean = sum / (4.0 * (double)n), share = (double)far / (double)n;
+  int apart = mean > c->mean_limit || share > c->far_limit;
+  printf("%s %s %s (%dx%d): mean %.3f, %.2f%% far%s\n", c->who, name, what, w, h, mean,
+         100 * share, apart ? "  <-- apart" : "");
+  c->bad += apart;
+  c->pages++;
   const char *dump = getenv("BDF_COMPARE_DUMP");
+  if (dump) {
+    char path[1024], file[256];
+    const char *base = strrchr(name, '/');
+    base = base ? base + 1 : name;
+    base = strcmp(base, "built in") == 0 ? "builtin" : base;
+    snprintf(file, sizeof file, "%s-%s", base, what);
+    for (char *f = file; *f; f++) {
+      *f = *f == ' ' ? '-' : *f;
+    }
+    snprintf(path, sizeof path, "%s/%s-libbdf.ppm", dump, file);
+    write_ppm(path, one, w, h);
+    snprintf(path, sizeof path, "%s/%s-%s.ppm", dump, file, c->who);
+    write_ppm(path, other, w, h);
+  }
+}
+
+/* A page of a view (region NULL) or a region of it, both ways: 0 when the
+ * rasterizer does not draw it. */
+static int compare_one(comparison *c, const bdf_doc *doc, bdf_renderer *soft,
+                       bdf_renderer *through, const char *name, size_t v, size_t p,
+                       const float *region) {
+  const double scale = 1.5;
+  bdf_image img;
+  bdf_error err;
+  double sx, sy;
+  char what[160];
+  if (region) {
+    /* (whole pixels for a region of whole units twice over) */
+    int w = (int)ceil((double)region[2] * scale), h = (int)ceil((double)region[3] * scale);
+    if (bdf_render_region(soft, v, p, region, w, h, &img, &err) != BDF_OK) {
+      return 0;
+    }
+    sx = (double)w / (double)region[2];
+    sy = (double)h / (double)region[3];
+    snprintf(what, sizeof what, "view %zu region %g,%g", v, (double)region[0], (double)region[1]);
+  } else {
+    bdf_page page;
+    if (bdf_doc_page(doc, v, p, &page) != BDF_OK ||
+        bdf_render_page(soft, v, p, scale, &img, &err) != BDF_OK) {
+      return 0;
+    }
+    sx = (double)img.width / (double)page.w;
+    sy = (double)img.height / (double)page.h;
+    snprintf(what, sizeof what, "view %zu page %zu", v, p);
+  }
+  uint8_t *other = malloc(4 * (size_t)img.width * (size_t)img.height);
+  if (other && c->draw(c->ctx, through, v, p, region, sx, sy, img.width, img.height, other)) {
+    compare_pixels(c, name, what, img.pixels, other, img.width, img.height);
+  } else {
+    printf("%s %s %s: not drawn  <-- apart\n", c->who, name, what);
+    c->bad++;
+  }
+  free(other);
+  bdf_image_free(&img);
+  return 1;
+}
+
+/* The pages of a document (at most max of each view) and the corner of its
+ * sheets, both ways. */
+static void compare_doc(comparison *c, bdf_doc *doc, const char *name, const bdf_fonts *fonts,
+                        size_t max, const float *corner) {
   bdf_error err;
   bdf_render_options opts = {0, 0, fonts};
   bdf_renderer *soft = NULL, *through = NULL;
@@ -72,51 +151,25 @@ static void compare_doc(comparison *c, bdf_doc *doc, const char *name, const bdf
     return;
   }
   for (size_t v = 0; v < bdf_doc_view_count(doc); v++) {
+    bdf_view view;
+    if (bdf_doc_view(doc, v, &view) == BDF_OK && view.kind_code == BDF_VIEW_SHEET) {
+      double sw, sh;
+      bdf_sheet_size(doc, v, &sw, &sh);
+      /* at most 400 units each way, in whole units twice over */
+      float region[4] = {0, 0, (float)(2 * floor(fmin(sw, 400) / 2)),
+                         (float)(2 * floor(fmin(sh, 400) / 2))};
+      if (corner) {
+        memcpy(region, corner, sizeof region);
+      }
+      if (region[2] > 0 && region[3] > 0) {
+        compare_one(c, doc, soft, through, name, v, 0, region);
+      }
+      continue;
+    }
     for (size_t p = 0; p < max; p++) {
-      bdf_page page;
-      bdf_image img;
-      const double scale = 1.5;
-      if (bdf_doc_page(doc, v, p, &page) != BDF_OK ||
-          bdf_render_page(soft, v, p, scale, &img, &err) != BDF_OK) {
+      if (!compare_one(c, doc, soft, through, name, v, p, NULL)) {
         break;
       }
-      uint8_t *other = malloc(4 * (size_t)img.width * (size_t)img.height);
-      if (other && c->draw(c->ctx, through, v, p, (double)img.width / (double)page.w,
-                           (double)img.height / (double)page.h, img.width, img.height, other)) {
-        size_t n = (size_t)img.width * (size_t)img.height, far = 0;
-        double sum = 0;
-        for (size_t i = 0; i < n; i++) {
-          int worst = 0;
-          for (int k = 0; k < 4; k++) {
-            int d = (int)img.pixels[4 * i + k] - (int)other[4 * i + k];
-            d = d < 0 ? -d : d;
-            sum += d;
-            worst = d > worst ? d : worst;
-          }
-          far += worst > 64;
-        }
-        double mean = sum / (4.0 * (double)n), share = (double)far / (double)n;
-        int apart = mean > c->mean_limit || share > c->far_limit;
-        printf("%s %s view %zu page %zu (%dx%d): mean %.3f, %.2f%% far%s\n", c->who, name, v, p,
-               img.width, img.height, mean, 100 * share, apart ? "  <-- apart" : "");
-        c->bad += apart;
-        c->pages++;
-        if (dump) {
-          char path[1024];
-          const char *base = strrchr(name, '/');
-          base = base ? base + 1 : name;
-          base = strcmp(base, "built in") == 0 ? "builtin" : base;
-          snprintf(path, sizeof path, "%s/%s-%zu-%zu-libbdf.ppm", dump, base, v, p);
-          write_ppm(path, img.pixels, img.width, img.height);
-          snprintf(path, sizeof path, "%s/%s-%zu-%zu-%s.ppm", dump, base, v, p, c->who);
-          write_ppm(path, other, img.width, img.height);
-        }
-      } else {
-        printf("%s %s view %zu page %zu: not drawn  <-- apart\n", c->who, name, v, p);
-        c->bad++;
-      }
-      free(other);
-      bdf_image_free(&img);
     }
   }
   /* what the two could not draw is the same */
@@ -513,7 +566,17 @@ static bdf_doc *builtin_pages(unsigned flags, wr *keep) {
                            "%s{\"w\":%d,\"h\":%d,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}",
                            i ? "," : "", PAGE, PAGE, name);
   }
-  snprintf(views + at, sizeof views - at, "]}]");
+  /* and a sheet with the first four as its tiles, and gridlines that fall
+   * between pixels */
+  char tiles[4][33];
+  for (uint32_t i = 0; i < 4; i++) {
+    part_name(16 + i, tiles[i]);
+  }
+  snprintf(views + at, sizeof views - at,
+           "]},{\"id\":\"s\",\"kind\":\"sheet\",\"tile\":%d,\"cols\":[[4,30.5]],"
+           "\"rows\":[[5,23.25]],\"gridlines\":true,"
+           "\"tiles\":{\"0,0\":\"%s\",\"1,0\":\"%s\",\"0,1\":\"%s\",\"1,1\":\"%s\"}}]",
+           PAGE, tiles[0], tiles[1], tiles[2], tiles[3]);
   return docb_open(&d, views, keep);
 }
 
@@ -540,7 +603,8 @@ int bdf_compare_main(int argc, char **argv, const char *who, bdf_compare_draw dr
     wr keep = {0};
     bdf_doc *doc = builtin_pages(flags, &keep);
     if (doc) {
-      compare_doc(&c, doc, "built in", fonts, 64);
+      static const float corner[4] = {6, 4, 110, 100};
+      compare_doc(&c, doc, "built in", fonts, 64, corner);
       bdf_doc_free(doc);
     } else {
       c.bad++;
@@ -557,7 +621,7 @@ int bdf_compare_main(int argc, char **argv, const char *who, bdf_compare_draw dr
       c.bad++;
       continue;
     }
-    compare_doc(&c, doc, argv[a], fonts, 4);
+    compare_doc(&c, doc, argv[a], fonts, 4, NULL);
     bdf_doc_free(doc);
     free(data);
   }

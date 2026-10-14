@@ -9,6 +9,7 @@
  * drawn by the rasterizer and given as an image that what was drawn is
  * multiplied by.
  */
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1179,13 +1180,13 @@ static void bdfi_player_run(bdfi_player *p, bdfi_robj *o) {
 }
 
 /* An object drawn from the state of a new canvas; what it leaves open is
- * closed, so that the canvas is as it was. */
-static void bdfi_player_top(bdfi_player *p, bdfi_robj *o, const uint8_t *hash) {
+ * closed, so that the canvas is as it was. m is the transform the canvas
+ * has from where the drawing began. */
+static void bdfi_player_top(bdfi_player *p, bdfi_robj *o, const uint8_t *hash, const bdfi_mat *m) {
   if (!o) {
     return;
   }
-  bdfi_mat identity = bdfi_mat_identity();
-  bdfi_pstate_init(&p->st, &identity);
+  bdfi_pstate_init(&p->st, m);
   p->unsaved = 0;
   int seen = bdfi_hash_set_add(&p->seen, hash);
   if (seen < 0) {
@@ -1243,6 +1244,212 @@ static bdf_status bdfi_player_end(bdfi_player *p, bdf_error *err) {
   return st;
 }
 
+/* Moves the origin of the canvas (+ 0.0: no negative zero, for those who
+ * write the numbers down). */
+static void bdfi_player_translate(bdfi_player *p, double x, double y) {
+  const double m[6] = {1, 0, 0, 1, x + 0.0, y + 0.0};
+  p->c->transform(p->c->ctx, m);
+}
+
+/* Clips the canvas to a rectangle in its units now. */
+static void bdfi_player_clip_rect(bdfi_player *p, double x, double y, double w, double h) {
+  bdfi_player_path_reset(p);
+  bdfi_player_rect(p, x, y, w, h);
+  bdf_canvas_path clip = bdfi_player_path(p);
+  p->c->clip(p->c->ctx, &clip, BDF_FILL_NONZERO);
+}
+
+/* Plays the layers of a page (when roles is not NULL, those whose role is
+ * one of them) at the transform m from where the drawing began. */
+static void bdfi_player_layers(bdfi_player *p, size_t view, size_t page, const bdf_page *pg,
+                               const bdfi_mat *m, const char *const *roles) {
+  for (size_t l = 0; l < pg->nlayers && !p->r->oom; l++) {
+    bdf_layer layer;
+    if (bdf_doc_layer(p->r->doc, view, page, l, &layer) != BDF_OK) {
+      continue;
+    }
+    if (roles) {
+      int kept = 0;
+      for (const char *const *role = roles; *role && !kept; role++) {
+        kept = bdfi_role_is(&layer, *role);
+      }
+      if (!kept) {
+        continue;
+      }
+    }
+    bdfi_player_top(p, bdfi_r_object(p->r, layer.obj), layer.obj, m);
+  }
+}
+
+/* The gridlines of a sheet as a path, in units from the corner of the
+ * region and at pixels counted from there. */
+typedef struct bdfi_player_grid {
+  bdfi_player *p;
+  int rows;
+  double from, to; /* where the lines run */
+} bdfi_player_grid;
+
+static int bdfi_player_grid_line(void *ctx, double px, int again) {
+  bdfi_player_grid *g = ctx;
+  if (again) {
+    return 0; /* one fill covers a pixel once, however many lines are on it */
+  }
+  double at = px / g->p->scale, w = 1 / g->p->scale;
+  if (g->rows) {
+    bdfi_player_rect(g->p, g->from, at, g->to - g->from, w);
+  } else {
+    bdfi_player_rect(g->p, at, g->from, w, g->to - g->from);
+  }
+  return 1;
+}
+
+static void bdfi_player_gridlines(bdfi_player *p, size_t view, const bdf_view *v,
+                                  const float region[4]) {
+  bdf_renderer *r = p->r;
+  double sw, sh;
+  bdf_sheet_size(r->doc, view, &sw, &sh);
+  double x1 = bdfi_fmin((double)(region[0] + region[2]), sw);
+  double y1 = bdfi_fmin((double)(region[1] + region[3]), sh);
+  const bdfi_mat dev = {{p->scale, 0, 0, p->scale, -(double)region[0] * p->scale,
+                         -(double)region[1] * p->scale}};
+  bdfi_player_path_reset(p);
+  bdfi_player_grid g = {p, 0, 0, y1 - (double)region[1]};
+  bdfi_grid_walk(r, view, 0, v->ncols, (double)region[0], x1, &dev, bdfi_player_grid_line, &g);
+  g.rows = 1;
+  g.to = x1 - (double)region[0];
+  bdfi_grid_walk(r, view, 1, v->nrows, (double)region[1], y1, &dev, bdfi_player_grid_line, &g);
+  if (p->nverbs == 0 || r->oom) {
+    return;
+  }
+  bdf_canvas_style style;
+  memset(&style, 0, sizeof style);
+  style.color = BDFI_GRID_COLOR;
+  style.alpha = 1;
+  style.blend = BDF_BLEND_SOURCE_OVER;
+  bdf_canvas_path path = bdfi_player_path(p);
+  p->c->fill(p->c->ctx, &path, BDF_FILL_NONZERO, &style);
+}
+
+/* The tiles of a sheet that a region overlaps, from the canvas at the corner
+ * of the region. */
+static void bdfi_player_tiles(bdfi_player *p, size_t view, const bdf_view *v,
+                              const float region[4]) {
+  bdf_renderer *r = p->r;
+  double tile;
+  bdfi_sheet_tile *places;
+  size_t nplaces = bdfi_sheet_tiles(r, view, v, region, &tile, &places);
+  for (size_t i = 0; i < nplaces && !r->oom; i++) {
+    bdf_tile t;
+    uint8_t hash[16];
+    if (bdf_doc_tile(r->doc, view, places[i].tile, &t) != BDF_OK) {
+      continue;
+    }
+    if (bdf_hash_parse(t.obj, t.obj_len, hash) != BDF_OK) {
+      bdfi_r_warnf(r, "bad tile hash \"%.*s\"", (int)(t.obj_len > 64 ? 64 : t.obj_len), t.obj);
+      continue;
+    }
+    double x = (double)places[i].tx * tile - (double)region[0];
+    double y = (double)places[i].ty * tile - (double)region[1];
+    const bdfi_mat m = {{1, 0, 0, 1, x, y}};
+    p->c->save(p->c->ctx);
+    bdfi_player_translate(p, x, y);
+    bdfi_player_clip_rect(p, 0, 0, tile, tile);
+    bdfi_player_top(p, bdfi_r_object(r, hash), hash, &m);
+    p->c->restore(p->c->ctx);
+  }
+  free(places);
+}
+
+/* The strips of a scroll view stacked without gaps, each cut to its body,
+ * from the canvas at the corner of the region. */
+static void bdfi_player_continuous(bdfi_player *p, size_t view, const bdf_view *v,
+                                   const float region[4]) {
+  static const char *const roles[] = {"body", "annotation", NULL};
+  bdf_renderer *r = p->r;
+  double y = 0.0;
+  for (size_t pi = 0; pi < v->npages && !r->oom; pi++) {
+    bdf_page pg;
+    if (bdf_doc_page(r->doc, view, pi, &pg) != BDF_OK) {
+      continue;
+    }
+    float body[4] = {0, 0, pg.w, pg.h};
+    if (pg.has_body) {
+      memcpy(body, pg.body, sizeof body);
+    }
+    double top = y;
+    y += (double)body[3];
+    if (top >= (double)(region[1] + region[3]) || y <= (double)region[1]) {
+      continue;
+    }
+    double dx = -(double)region[0], dy = top - (double)region[1];
+    p->c->save(p->c->ctx);
+    bdfi_player_translate(p, dx, dy);
+    bdfi_player_clip_rect(p, 0, 0, (double)body[2], (double)body[3]);
+    if (body[0] != 0 || body[1] != 0) {
+      bdfi_player_translate(p, -(double)body[0], -(double)body[1]);
+    }
+    const bdfi_mat m = {{1, 0, 0, 1, dx - (double)body[0], dy - (double)body[1]}};
+    bdfi_player_layers(p, view, pi, &pg, &m, roles);
+    p->c->restore(p->c->ctx);
+  }
+}
+
+bdf_status bdf_play_region(bdf_renderer *r, size_t view, size_t page, const float region[4],
+                           double scale, const bdf_canvas *canvas, bdf_error *err) {
+  bdfi_player p;
+  if (!bdfi_player_begin(&p, r, scale, canvas, err)) {
+    return BDF_ERR_ARG;
+  }
+  bdf_view v;
+  if (!region || !r->doc) {
+    bdfi_error_set(err, BDF_ERR_ARG, 0, "bad argument");
+    return BDF_ERR_ARG;
+  }
+  if (bdf_doc_view(r->doc, view, &v) != BDF_OK) {
+    bdfi_error_set(err, BDF_ERR_ARG, 0, "no such view");
+    return BDF_ERR_ARG;
+  }
+  for (int i = 0; i < 4; i++) {
+    if (!(fabs((double)region[i]) <= FLT_MAX)) {
+      bdfi_error_set(err, BDF_ERR_ARG, 0, "bad region");
+      return BDF_ERR_ARG;
+    }
+  }
+  if (!(region[2] > 0) || !(region[3] > 0)) {
+    bdfi_error_set(err, BDF_ERR_ARG, 0, "empty region");
+    return BDF_ERR_ARG;
+  }
+  bdf_page pg;
+  memset(&pg, 0, sizeof pg);
+  if (v.kind_code != BDF_VIEW_SHEET && v.kind_code != BDF_VIEW_SCROLL &&
+      bdf_doc_page(r->doc, view, page, &pg) != BDF_OK) {
+    bdfi_error_set(err, BDF_ERR_ARG, 0, "no such page");
+    return BDF_ERR_ARG;
+  }
+  p.page = bdfi_irect_of(0, 0, (int)ceil(bdfi_clampf((double)region[2] * p.scale)),
+                         (int)ceil(bdfi_clampf((double)region[3] * p.scale)));
+  if (bdfi_irect_empty(p.page)) {
+    p.page = bdfi_irect_of(0, 0, 1, 1);
+  }
+  canvas->save(canvas->ctx);
+  bdfi_player_clip_rect(&p, 0, 0, (double)region[2], (double)region[3]);
+  if (v.kind_code == BDF_VIEW_SHEET) {
+    if (v.gridlines) {
+      bdfi_player_gridlines(&p, view, &v, region);
+    }
+    bdfi_player_tiles(&p, view, &v, region);
+  } else if (v.kind_code == BDF_VIEW_SCROLL) {
+    bdfi_player_continuous(&p, view, &v, region);
+  } else {
+    const bdfi_mat m = {{1, 0, 0, 1, -(double)region[0], -(double)region[1]}};
+    bdfi_player_translate(&p, m.v[4], m.v[5]);
+    bdfi_player_clip_rect(&p, 0, 0, (double)pg.w, (double)pg.h);
+    bdfi_player_layers(&p, view, page, &pg, &m, NULL);
+  }
+  canvas->restore(canvas->ctx);
+  return bdfi_player_end(&p, err);
+}
+
 bdf_status bdf_play_page(bdf_renderer *r, size_t view, size_t page, double scale,
                          const bdf_canvas *canvas, bdf_error *err) {
   bdfi_player p;
@@ -1260,17 +1467,9 @@ bdf_status bdf_play_page(bdf_renderer *r, size_t view, size_t page, double scale
     p.page = bdfi_irect_of(0, 0, 1, 1);
   }
   canvas->save(canvas->ctx);
-  bdfi_player_path_reset(&p);
-  bdfi_player_rect(&p, 0, 0, (double)pg.w, (double)pg.h);
-  bdf_canvas_path clip = bdfi_player_path(&p);
-  canvas->clip(canvas->ctx, &clip, BDF_FILL_NONZERO);
-  for (size_t l = 0; l < pg.nlayers && !r->oom; l++) {
-    bdf_layer layer;
-    if (bdf_doc_layer(r->doc, view, page, l, &layer) != BDF_OK) {
-      continue;
-    }
-    bdfi_player_top(&p, bdfi_r_object(r, layer.obj), layer.obj);
-  }
+  bdfi_player_clip_rect(&p, 0, 0, (double)pg.w, (double)pg.h);
+  const bdfi_mat identity = bdfi_mat_identity();
+  bdfi_player_layers(&p, view, page, &pg, &identity, NULL);
   canvas->restore(canvas->ctx);
   return bdfi_player_end(&p, err);
 }
@@ -1302,6 +1501,7 @@ bdf_status bdf_play_part(bdf_renderer *r, const uint8_t hash[16], double scale,
   if (bdfi_irect_empty(p.page)) {
     p.page = bdfi_irect_of(0, 0, 1, 1);
   }
-  bdfi_player_top(&p, o, hash);
+  const bdfi_mat identity = bdfi_mat_identity();
+  bdfi_player_top(&p, o, hash, &identity);
   return bdfi_player_end(&p, err);
 }

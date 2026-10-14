@@ -8,8 +8,8 @@
 
 #include "../tools/compare.h"
 
-static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx, double sy, int w,
-                int h, uint8_t *pixels) {
+static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, const float *region,
+                double sx, double sy, int w, int h, uint8_t *pixels) {
   (void)ctx;
   /* straight into the pixels of the comparison: premultiplied RGBA */
   const SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType, kPremul_SkAlphaType);
@@ -23,7 +23,8 @@ static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx,
   canvas->clear(SK_ColorWHITE);
   canvas->scale(SkScalar(sx), SkScalar(sy));
   bdf_error err;
-  const bool ok = bdf_skia_draw_page(bs, view, page, canvas, &err) == BDF_OK;
+  const bool ok = (region ? bdf_skia_draw_region(bs, view, page, region, canvas, &err)
+                         : bdf_skia_draw_page(bs, view, page, canvas, &err)) == BDF_OK;
   bdf_skia_free(bs);
   return ok;
 }

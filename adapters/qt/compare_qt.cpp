@@ -8,8 +8,8 @@
 
 #include "../tools/compare.h"
 
-static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx, double sy, int w,
-                int h, uint8_t *pixels) {
+static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, const float *region,
+                double sx, double sy, int w, int h, uint8_t *pixels) {
   (void)ctx;
   QImage image(w, h, QImage::Format_RGBA8888_Premultiplied);
   if (image.isNull()) {
@@ -22,7 +22,8 @@ static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx,
   {
     QPainter p(&image);
     p.scale(sx, sy);
-    ok = bq && bdf_qt_draw_page(bq, view, page, &p, &err) == BDF_OK;
+    ok = bq && (region ? bdf_qt_draw_region(bq, view, page, region, &p, &err)
+                       : bdf_qt_draw_page(bq, view, page, &p, &err)) == BDF_OK;
   }
   bdf_qt_free(bq);
   for (int y = 0; y < h; y++) {

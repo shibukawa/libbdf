@@ -5,8 +5,8 @@
 
 #include "../tools/compare.h"
 
-static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx, double sy, int w,
-                int h, uint8_t *pixels) {
+static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, const float *region,
+                double sx, double sy, int w, int h, uint8_t *pixels) {
   (void)ctx;
   bdf_cg *cg = bdf_cg_new(r);
   CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
@@ -22,7 +22,8 @@ static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx,
   CGContextTranslateCTM(c, 0, h);
   CGContextScaleCTM(c, sx, -sy);
   bdf_error err;
-  int ok = bdf_cg_draw_page(cg, view, page, c, &err) == BDF_OK;
+  int ok = (region ? bdf_cg_draw_region(cg, view, page, region, c, &err)
+                   : bdf_cg_draw_page(cg, view, page, c, &err)) == BDF_OK;
   CGContextRelease(c);
   bdf_cg_free(cg);
   return ok;

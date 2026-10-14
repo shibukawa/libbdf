@@ -11,27 +11,31 @@ using SkiaSharp;
 namespace AvaloniaViewer;
 
 /// <summary>
-/// A page of a document, drawn by libbdf through Skia: Avalonia draws with
-/// Skia, so the page is played on the very SKCanvas the window is drawn on
-/// (LibBdf.SkiaSharp), as vectors at the resolution of the screen.
+/// A page of a document, or a sheet, drawn by libbdf through Skia: Avalonia
+/// draws with Skia, so the page is played on the very SKCanvas the window is
+/// drawn on (LibBdf.SkiaSharp), as vectors at the resolution of the screen.
+/// Of a sheet, which may be far larger than the window, only what is in
+/// sight is drawn.
 /// </summary>
 public sealed class PageView : Control
 {
     private BdfSkiaRenderer? _skia;
     private readonly object _drawing = new(); // a renderer is for one thread at a time
     private int _view, _page;
+    private bool _sheet;
     private Size _size;
 
     /// <summary>Pixels a unit of the page: a unit is a point.</summary>
     public double Zoom { get; private set; } = 1;
 
-    public void Show(BdfSkiaRenderer? skia, Size size, int view, int page, double zoom)
+    public void Show(BdfSkiaRenderer? skia, Size size, int view, int page, bool sheet, double zoom)
     {
         lock (_drawing)
         {
             _skia = skia;
             _view = view;
             _page = page;
+            _sheet = sheet;
             _size = size;
             Zoom = zoom;
         }
@@ -85,14 +89,37 @@ public sealed class PageView : Control
                 canvas.Clear(SKColors.White); // the paper is the caller's
                 try
                 {
-                    view._skia.DrawPage(canvas, view._page, view._view);
+                    if (view._sheet)
+                    {
+                        DrawSheet(canvas, view._skia, view._view);
+                    }
+                    else
+                    {
+                        view._skia.DrawPage(canvas, view._page, view._view);
+                    }
                 }
                 catch (BdfException e)
                 {
-                    Console.Error.WriteLine($"page {view._page + 1}: {e.Message}");
+                    Console.Error.WriteLine(view._sheet ? $"sheet: {e.Message}" : $"page {view._page + 1}: {e.Message}");
                 }
                 canvas.RestoreToCount(depth);
             }
+        }
+
+        // What is in sight of a sheet (the clip of the canvas), from a corner
+        // on a whole pixel, so that the gridlines are sharp.
+        private static void DrawSheet(SKCanvas canvas, BdfSkiaRenderer skia, int view)
+        {
+            SKRect seen = canvas.LocalClipBounds;
+            SKMatrix m = canvas.TotalMatrix;
+            if (seen.IsEmpty || m.ScaleX <= 0 || m.ScaleY <= 0)
+            {
+                return;
+            }
+            float left = (MathF.Floor(m.ScaleX * seen.Left + m.TransX) - m.TransX) / m.ScaleX;
+            float top = (MathF.Floor(m.ScaleY * seen.Top + m.TransY) - m.TransY) / m.ScaleY;
+            canvas.Translate(left, top);
+            skia.DrawRegion(canvas, new SKRect(left, top, seen.Right, seen.Bottom), view);
         }
     }
 }

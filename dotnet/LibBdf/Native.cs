@@ -240,6 +240,13 @@ public static unsafe class Native
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     public static extern int bdf_play_page(IntPtr renderer, nuint view, nuint page, double scale, Canvas* canvas, Error* err);
 
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int bdf_play_region(IntPtr renderer, nuint view, nuint page, float* region, double scale,
+        Canvas* canvas, Error* err);
+
+    [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void bdf_sheet_size(IntPtr doc, nuint view, double* w, double* h);
+
     /// <summary>The text libbdf gave with n bytes at p.</summary>
     public static string Text(byte* p, nuint n) =>
         p == null || n == 0 ? "" : System.Text.Encoding.UTF8.GetString(p, checked((int)n));
