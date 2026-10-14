@@ -1,8 +1,8 @@
 name: release
 
 # A tag v<version> makes a draft release with what packaging/README.md
-# lists: the single header, the binaries of each platform, the xcframework
-# and the NuGet packages. Dispatched by hand, or for a pull request that
+# lists: the single header, the binaries of each platform, the xcframework,
+# the NuGet packages and the Android library. Dispatched by hand, or for a pull request that
 # changes this file or the scripts it runs, it builds the same, checks that
 # every file of a release is there (packaging/release-files.sh) and leaves
 # them as artifacts of the run, without a release.
@@ -15,6 +15,7 @@ on:
       - "packaging/binaries.sh"
       - "packaging/xcframework.sh"
       - "packaging/release-files.sh"
+      - "android/libbdf/build.gradle.kts"
   workflow_dispatch:
 
 permissions:
@@ -105,10 +106,31 @@ jobs:
           name: nuget
           path: ${{ runner.temp }}/nupkg/*.nupkg
 
+  # The Android library: the AAR with the native code of each ABI, and the
+  # same as a Maven repository (AAR, POM, sources) in a zip, for a
+  # repository of one's own or Maven Central.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The NDK and the CMake the build names
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "cmake;3.22.1" > /dev/null
+      - run: android/gradlew -p android --console=plain :libbdf:assembleRelease :libbdf:publishReleasePublicationToBuildRepository
+      - name: The files
+        run: |
+          version=$(sed -n 's/^#define BDF_VERSION_STRING *"\(.*\)"/\1/p' include/bdf/bdf.h)
+          mkdir -p "$RUNNER_TEMP/android"
+          cp android/libbdf/build/outputs/aar/libbdf-release.aar "$RUNNER_TEMP/android/libbdf-android-$version.aar"
+          (cd android/libbdf/build/repo && zip -qr "$RUNNER_TEMP/android/libbdf-android-$version-maven.zip" .)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android
+          path: ${{ runner.temp }}/android/*
+
   # What a release would hold, checked on every run: the files of the other
   # jobs, each there and with what it is for inside.
   assets:
-    needs: [single-header, binaries, xcframework, nuget]
+    needs: [single-header, binaries, xcframework, nuget, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -17,7 +17,7 @@ What exists today is the core's reading side, the rasterizer, and the adapters:
 - adapters over it, each a header and a source file (`include/bdf/bdf_<name>.h`, `adapters/<name>/`): **cairo** (`bdf_cairo_draw_page`: an image, a PDF or SVG file, a GTK widget), **Core Graphics** (`bdf_cg_draw_page`: a bitmap, a PDF, an `NSView` or `UIView`), **QPainter** (`bdf_qt_draw_page`: a `QImage`, a `QWidget`, a `QPdfWriter`; Qt 6 or 5.15) and **Skia** (`bdf_skia_draw_page` on an `SkCanvas`: what Chrome draws a canvas with, and through SkiaSharp the way to .NET). The last two are C++
 - unit tests, libFuzzer targets, a differential test harness in Go that runs every document, part, object, font and text of the reference's test documents through both readers, and a runner for the reference's conformance suite
 
-[examples/](examples/) has programs that use it: a command-line tool, the single header on its own, viewers with SDL3, GTK 4, Qt and SwiftUI, and thumbnails with .NET and SkiaSharp.
+[examples/](examples/) has programs that use it: a command-line tool, the single header on its own, viewers with SDL3, GTK 4, Qt and SwiftUI, and thumbnails with .NET and SkiaSharp; [android/sample](android/sample/) is a viewer for Android.
 
 [docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
 
@@ -59,7 +59,7 @@ Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg
 
 ### Packages
 
-Beside CMake and pkg-config the repository has what other build systems and languages take ([packaging/README.md](packaging/README.md) has the table): a Swift package (`Package.swift`: `BDF`, a small Swift layer that opens a document and draws its pages on a `CGContext`, over `CBDF` and `CBDFCoreGraphics`), a script for an xcframework, a Conan 2 recipe (`conanfile.py`), a vcpkg overlay port and a Meson wrap (`packaging/`), and libbdf for .NET (`dotnet/`: the bindings `LibBdf`, and `LibBdf.SkiaSharp`, which draws pages on an `SKCanvas`, for .NET MAUI and the like). A tag `v<version>` makes a draft release with the single header, binaries for Linux, macOS and Windows, the xcframework and the NuGet packages (`.github/workflows/release.yml`). Nothing is published to a registry yet.
+Beside CMake and pkg-config the repository has what other build systems and languages take ([packaging/README.md](packaging/README.md) has the table): a Swift package (`Package.swift`: `BDF`, a small Swift layer that opens a document and draws its pages on a `CGContext`, over `CBDF` and `CBDFCoreGraphics`), a script for an xcframework, a Conan 2 recipe (`conanfile.py`), a vcpkg overlay port and a Meson wrap (`packaging/`), libbdf for .NET (`dotnet/`: the bindings `LibBdf`, and `LibBdf.SkiaSharp`, which draws pages on an `SKCanvas`, for .NET MAUI and the like), and libbdf for Android ([android/](android/README.md): `io.github.shibukawa:libbdf`, an AAR of the native code of each ABI with Kotlin classes that open, unlock, search and draw documents into `Bitmap`s, and a sample viewer). A tag `v<version>` makes a draft release with the single header, binaries for Linux, macOS and Windows, the xcframework, the NuGet packages and the Android library (`.github/workflows/release.yml`). Nothing is published to a registry yet.
 
 ### The single header
 
