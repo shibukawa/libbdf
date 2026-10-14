@@ -603,7 +603,10 @@ BDF_API void bdf_object_bbox(const bdf_object *obj, float out[4]);
 
 BDF_API size_t bdf_object_string_count(const bdf_object *obj);
 /* The strings are UTF-8 and NUL-terminated as a convenience; they may hold
- * NUL bytes of their own, so use the length. NULL when i is out of range. */
+ * NUL bytes of their own, so use the length. NULL when i is out of range.
+ * A byte order mark at the start of a string of a part is not part of it
+ * (the format says so): here and in the runs of a text index, the string is
+ * what follows the mark. */
 BDF_API const char *bdf_object_string(const bdf_object *obj, size_t i, size_t *len);
 
 BDF_API size_t bdf_object_path_count(const bdf_object *obj);
@@ -920,12 +923,15 @@ BDF_API bdf_status bdf_search_text_page(const bdf_search_text *st, size_t view, 
  * bdf_text_search finds text in the runs of a text index (a view's part, or
  * bdf_doc_view_text) the way the reference's viewer does: characters are
  * taken for what they are to a reader (NFKC: full and half width, ligatures,
- * circled and squared forms; katakana as hiragana; the minus sign as a
- * hyphen; and, unless the search is case-sensitive, capitals as small
- * letters), and a phrase is found across the runs of a line and across
- * lines, but not across a paragraph break. Each character is normalised on
- * its own, so a letter and a combining accent do not match the two written
- * as one. The index must outlive the search.
+ * circled and squared forms, a letter and the accent after it as the one
+ * letter; katakana as hiragana; the minus sign as a hyphen; and, unless the
+ * search is case-sensitive, capitals as small letters), and a phrase is
+ * found across the runs of a line and across lines, but not across a
+ * paragraph break. The text of a run and a query are each normalised as a
+ * whole; a run is normalised by itself, so a letter at the end of one and an
+ * accent at the start of the next stay two. A hit covers whole characters as
+ * a reader sees them: a letter with its accents, a Hangul syllable. The
+ * index must outlive the search.
  */
 typedef struct bdf_text_search bdf_text_search;
 

@@ -145,8 +145,9 @@ func main() {
 // textTables writes src/unicode_text.h: what drawing text takes of the
 // Unicode data beyond form C. The names of font families are compared in
 // form KC and in lower case (the compatibility decompositions and Go's
-// unicode.ToLower), and runs of right-to-left characters are found by their
-// bidirectional class (golang.org/x/text/unicode/bidi).
+// unicode.ToLower), runs of right-to-left characters are found by their
+// bidirectional class (golang.org/x/text/unicode/bidi), and a search keeps
+// combining marks (Go's unicode.M) with the character before them.
 func textTables(path string) {
 	type decomp struct {
 		cp  rune
@@ -159,9 +160,17 @@ func textTables(path string) {
 		rtl    int
 	}
 	var bidis []bidiRange
+	var marks [][2]rune
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if r >= 0xD800 && r <= 0xDFFF {
 			continue
+		}
+		if unicode.Is(unicode.M, r) {
+			if n := len(marks); n > 0 && marks[n-1][1] == r-1 {
+				marks[n-1][1] = r
+			} else {
+				marks = append(marks, [2]rune{r, r})
+			}
 		}
 		s := string(r)
 		if kd := norm.NFKD.String(s); kd != norm.NFD.String(s) {
@@ -233,10 +242,21 @@ func textTables(path string) {
 			w.WriteString("\n")
 		}
 	}
+	w.WriteString("};\n\n")
+	fmt.Fprintf(&w, "/* {first, last} of the combining marks (the general categories Mn, Mc and\n * Me: \\p{M} of a regular expression), which a search keeps with the\n * character before them */\nstatic const uint32_t bdfi_mark_ranges[%d][2] = {\n", len(marks))
+	for i, m := range marks {
+		if i%5 == 0 {
+			w.WriteString("   ")
+		}
+		fmt.Fprintf(&w, " {0x%X, 0x%X},", m[0], m[1])
+		if i%5 == 4 || i == len(marks)-1 {
+			w.WriteString("\n")
+		}
+	}
 	w.WriteString("};\n")
 	if err := os.WriteFile(path, []byte(w.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "text: %d compatibility decompositions (%d code points), %d lower case pairs, %d ranges of direction\n", len(decomps), len(pool), len(lower), len(bidis))
+	fmt.Fprintf(os.Stderr, "text: %d compatibility decompositions (%d code points), %d lower case pairs, %d ranges of direction, %d ranges of marks\n", len(decomps), len(pool), len(lower), len(bidis), len(marks))
 }

@@ -401,14 +401,10 @@ func TestBuiltDocuments(t *testing.T) {
 	// the documents the C reader refuses on purpose are known by name
 	for name, data := range docs {
 		c := cDump(data, nil, false, false)
-		// an encoding that is not read, and bytes of it; what is ASCII in one
-		// is read, but for the encoding that is U+FFFD whatever the bytes
-		other := strings.HasPrefix(name, "other-") && !strings.HasPrefix(name, "other-after-root-") || name == "label-7" || name == "label-8" ||
-			name == "other-after-root-replacement" || name == "other-after-root-hz-gb-2312"
+		// an encoding that is not read, declared where a declaration counts
+		// (before the root element), and bytes of it
+		other := strings.HasPrefix(name, "other-") && !strings.HasPrefix(name, "other-after-root-") || name == "label-7" || name == "label-8"
 		if (c == "encoding\n") != other {
-			t.Errorf("%s: the C reader says %q", name, strings.SplitN(c, "\n", 2)[0])
-		}
-		if c == "entities\n" != (name == "declared-entities-hidden-large") {
 			t.Errorf("%s: the C reader says %q", name, strings.SplitN(c, "\n", 2)[0])
 		}
 	}
@@ -489,25 +485,32 @@ func TestKnownDifferences(t *testing.T) {
 	}
 	// an encoding the C reader does not read
 	check("shift_jis", []byte(`<?xml version="1.0" encoding="shift_jis"?><svg><text>`+"\x93\xfa\x96\x7b"+`</text></svg>`), "encoding")
-	check("shift_jis after the root", []byte(`<svg><?xml version="1.0" encoding="shift_jis"?><text>`+"\x93\xfa"+`</text></svg>`), "encoding")
 	check("iso-2022-jp", []byte(`<?xml version="1.0" encoding="iso-2022-jp"?><svg><text>`+"\x1b$B\x46\x7c\x1b(B"+`</text></svg>`), "encoding")
-	check("replacement", []byte(`<svg><?xml version="1.0" encoding="iso-2022-kr"?></svg>`), "encoding")
-	// the same encodings, and nothing but ASCII after the declaration: read alike
+	// read alike: the same encodings with nothing but ASCII after the
+	// declaration, and what looks like a declaration inside the root
+	// element, which is a processing instruction and converts nothing
 	for _, doc := range []string{`<?xml version="1.0" encoding="shift_jis"?><svg><text>ascii</text></svg>`, `<svg><?xml version="1.0" encoding="windows-1251"?><g/></svg>`,
-		`<?xml version="1.0" encoding="iso-2022-jp"?><svg><text>ascii</text></svg>`, `<?xml version="1.0" encoding="gb18030"?><svg a="&#x65e5;">&amp;</svg>`} {
+		`<?xml version="1.0" encoding="iso-2022-jp"?><svg><text>ascii</text></svg>`, `<?xml version="1.0" encoding="gb18030"?><svg a="&#x65e5;">&amp;</svg>`,
+		`<svg><?xml version="1.0" encoding="shift_jis"?><text>` + "\x93\xfa" + `</text></svg>`, `<svg><?xml version="1.0" encoding="iso-2022-kr"?></svg>`,
+		`<?xml version="1.0"?><?xml version="1.0" encoding="shift_jis"?><svg><text>` + "\x93\xfa" + `</text></svg>`} {
 		if d := compare([]byte(doc), nil); d != "" || !strings.HasPrefix(cDump([]byte(doc), nil, false, false), "doc\n") {
 			t.Errorf("%q: %s", doc, d)
 		}
 	}
-	// entities whose references the reference's count does not see: they are
-	// declared before the XML declaration, in ASCII, and referred to after
-	// it, in UTF-16. The reference replaces them (2.4 MB of text here).
+	// entities whose references the count before the reading does not see:
+	// they are declared before the XML declaration, in ASCII, and referred
+	// to after it, in UTF-16. The reader bounds what they add to the
+	// document in all, and both stop at the same reference (2.4 MB of text
+	// here, in a document of 300 KB).
 	hidden := `<!DOCTYPE svg [<!ENTITY a "` + strings.Repeat("x", 300000) + `">]><?xml version="1.0" encoding="utf-16le"?>` +
 		string(utf16Of(`<svg><g a="&a;&a;"/><g a="&a;&a;"/><g a="&a;&a;"/><g a="&a;&a;"/></svg>`, false, false))
-	check("hidden entities", []byte(hidden), "entities")
-	// the same within the megabyte is read alike
-	if d := compare([]byte(strings.Replace(hidden, strings.Repeat("x", 300000), strings.Repeat("x", 100000), 1)), nil); d != "" {
-		t.Errorf("hidden entities of less than a megabyte: %s", d)
+	if d := compare([]byte(hidden), nil); d != "" || strings.Count(cDump([]byte(hidden), nil, false, false), "\nE\t") >= 5 {
+		t.Errorf("hidden entities: %s", d)
+	}
+	// the same within the bound is read whole
+	small := strings.Replace(hidden, strings.Repeat("x", 300000), strings.Repeat("x", 100000), 1)
+	if d := compare([]byte(small), nil); d != "" || strings.Count(cDump([]byte(small), nil, false, false), "\nE\t") != 5 {
+		t.Errorf("hidden entities within the bound: %s", d)
 	}
 	if os.Getenv("LIBBDF_SVG_HEAVY") == "" {
 		t.Log("LIBBDF_SVG_HEAVY is not set: the documents past the C reader's own limits (style declarations, size) are not made")

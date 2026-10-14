@@ -551,6 +551,35 @@ static void test_paths(void) {
   free(w.b);
 }
 
+/* A byte order mark at the start of a string is not part of it (spec §6):
+ * one is dropped, as a decoder of UTF-8 drops one, and no other. */
+static void test_byte_order_mark(void) {
+  wr strings = {0};
+  w_varuint(&strings, 4);
+  w_str(&strings, "\xEF\xBB\xBFmarked");
+  w_str(&strings, "\xEF\xBB\xBF\xEF\xBB\xBFtwice");
+  w_str(&strings, "in\xEF\xBB\xBFside");
+  w_str(&strings, "\xEF\xBB\xBF");
+  wr w = object(&strings, NULL, NULL, NULL, NULL);
+  bdf_object *o = NULL;
+  bdf_error err;
+  CHECK(bdf_object_decode(w.b, w.n, &o, &err) == BDF_OK);
+  if (o) {
+    size_t len = 0;
+    const char *s = bdf_object_string(o, 0, &len);
+    CHECK(s && len == 6 && memcmp(s, "marked", 7) == 0);
+    s = bdf_object_string(o, 1, &len);
+    CHECK(s && len == 8 && memcmp(s, "\xEF\xBB\xBFtwice", 9) == 0);
+    s = bdf_object_string(o, 2, &len);
+    CHECK(s && len == 9 && memcmp(s, "in\xEF\xBB\xBFside", 10) == 0);
+    s = bdf_object_string(o, 3, &len);
+    CHECK(s && len == 0 && s[0] == 0);
+  }
+  bdf_object_free(o);
+  free(strings.b);
+  free(w.b);
+}
+
 static void test_misc(void) {
   CHECK(strcmp(bdf_version(), BDF_VERSION_STRING) == 0);
   CHECK(strcmp(bdf_op_name(BDF_OP_IMAGE_SUB), "IMAGE_SUB") == 0);
@@ -571,6 +600,7 @@ int main(void) {
   test_bad_values();
   test_headers();
   test_paths();
+  test_byte_order_mark();
   test_misc();
   if (failures) {
     fprintf(stderr, "%d checks failed\n", failures);

@@ -1,11 +1,12 @@
 /*
  * A search of the runs of a text index that takes characters for what they
  * are to a reader: a port of TextSearch of the reference's TypeScript reader
- * (packages/core/src/search.ts). Each character is normalised on its own
- * (NFKC, lower case, katakana as hiragana, the minus sign as a hyphen; the
- * tables are that reader's normalizeChar, asked about every code point), and
- * the normalised text keeps where each of its characters came from, so that
- * a hit is located in the runs.
+ * (packages/core/src/search.ts). The text of a run is normalised as a string
+ * (form KC, so that a letter and the marks after it are the letter they
+ * compose), and then a character at a time (lower case, katakana as
+ * hiragana, the minus sign as a hyphen; the tables are that reader's, asked
+ * about every character of normalised text). The normalised text keeps where
+ * each of its characters came from, so that a hit is located in the runs.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -13,10 +14,17 @@
 #include "bdf_internal.h"
 #include "unicode_fold.h"
 
-/* A character becomes at most 18 others, and the arrays below hold 12 bytes
+/* A character becomes at most 18 others, and the arrays below hold 16 bytes
  * for each: the text a search takes is bounded. */
 #define BDFI_MAX_SEARCH_TEXT ((size_t)1 << 26)
 #define BDFI_NO_RUN          UINT32_MAX
+#define BDFI_NFKC_MOST       18
+
+/* MAX_PIECE of the reference: the most characters of a piece of a run that
+ * is normalised together. A letter has a few marks; text made to have
+ * thousands in a row would be normalised again for each of them. Past this a
+ * piece ends where it is. */
+#define BDFI_MAX_PIECE 32
 
 /* ---- What a character is to a search ------------------------------------ */
 
@@ -61,8 +69,8 @@ static int bdfi_table_find(const uint32_t (*ranges)[3], size_t nranges,
   return 0;
 }
 
-/* bdfi_fold is a character as a search has it: *out and its length (one
- * holds it when it is one character). */
+/* bdfi_fold is a character of normalised text as a search has it: *out and
+ * its length (one holds it when it is one character). */
 static size_t bdfi_fold(uint32_t cp, int case_sensitive, uint32_t *one, const uint32_t **out) {
   size_t n = 1;
   *out = one;
@@ -110,20 +118,37 @@ static int bdfi_u32s_push(bdfi_u32s *b, uint32_t c) {
   return 0;
 }
 
-/* bdfi_fold_text normalises UTF-8 text into code points. */
+/* bdfi_fold_text normalises UTF-8 text into code points (normalizeQuery):
+ * form KC of the text as a whole, and then each of its characters folded. */
 static int bdfi_fold_text(const char *s, size_t len, int case_sensitive, bdfi_u32s *out) {
+  bdfi_u32s src = {0};
+  bdfi_points norm = {0};
+  int rc = -1;
   size_t used;
   for (size_t i = 0; i < len; i += used) {
+    if (bdfi_u32s_push(&src, bdfi_utf8_next(s, len, i, &used)) < 0) {
+      goto done;
+    }
+  }
+  if (bdfi_nfkc_points(&norm, src.v, src.n) < 0) {
+    goto done;
+  }
+  for (size_t i = 0; i < norm.n; i++) {
     uint32_t one;
     const uint32_t *to;
-    size_t n = bdfi_fold(bdfi_utf8_next(s, len, i, &used), case_sensitive, &one, &to);
+    size_t n = bdfi_fold(norm.c[i], case_sensitive, &one, &to);
     for (size_t k = 0; k < n; k++) {
       if (bdfi_u32s_push(out, to[k]) < 0) {
-        return -1;
+        goto done;
       }
     }
   }
-  return 0;
+  rc = 0;
+done:
+  free(src.v);
+  free(norm.c);
+  free(norm.cc);
+  return rc;
 }
 
 /* A growing string. */
@@ -193,9 +218,9 @@ struct bdf_text_search {
   const bdf_text_index *index;
   int case_sensitive;
   /* the normalised text, a code point each, with for each the run it came
-   * from (BDFI_NO_RUN: a separator between runs) and the offset in the
-   * run's text of the character it came from */
-  uint32_t *norm, *run_of, *off_of;
+   * from (BDFI_NO_RUN: a separator between runs) and where the piece of the
+   * run's text it was normalised from starts and ends */
+  uint32_t *norm, *run_of, *off_of, *end_of;
   size_t n, cap;
 };
 
@@ -206,10 +231,12 @@ void bdf_text_search_free(bdf_text_search *s) {
   free(s->norm);
   free(s->run_of);
   free(s->off_of);
+  free(s->end_of);
   free(s);
 }
 
-static int bdfi_search_push(bdf_text_search *s, uint32_t c, uint32_t run, uint32_t off) {
+static int bdfi_search_push(bdf_text_search *s, uint32_t c, uint32_t run, uint32_t off,
+                            uint32_t end) {
   if (s->n == s->cap) {
     size_t cap = s->cap ? s->cap * 2 : 256;
     uint32_t *a = bdfi_realloc_array(s->norm, cap, sizeof *a);
@@ -224,7 +251,11 @@ static int bdfi_search_push(bdf_text_search *s, uint32_t c, uint32_t run, uint32
     if (c3) {
       s->off_of = c3;
     }
-    if (!a || !b || !c3) {
+    uint32_t *d = bdfi_realloc_array(s->end_of, cap, sizeof *d);
+    if (d) {
+      s->end_of = d;
+    }
+    if (!a || !b || !c3 || !d) {
       return -1;
     }
     s->cap = cap;
@@ -232,8 +263,96 @@ static int bdfi_search_push(bdf_text_search *s, uint32_t c, uint32_t run, uint32
   s->norm[s->n] = c;
   s->run_of[s->n] = run;
   s->off_of[s->n] = off;
+  s->end_of[s->n] = end;
   s->n++;
   return 0;
+}
+
+/* The characters a piece of a run normalises to, folded and added to the
+ * text with where the piece is. */
+static bdf_status bdfi_search_piece(bdf_text_search *s, const uint32_t *norm, size_t n, uint32_t run,
+                                    size_t start, size_t end) {
+  for (size_t i = 0; i < n; i++) {
+    uint32_t one;
+    const uint32_t *to;
+    size_t m = bdfi_fold(norm[i], s->case_sensitive, &one, &to);
+    if (m > BDFI_MAX_SEARCH_TEXT - s->n) {
+      return BDF_ERR_FORMAT;
+    }
+    for (size_t k = 0; k < m; k++) {
+      if (bdfi_search_push(s, to[k], run, (uint32_t)start, (uint32_t)end) < 0) {
+        return BDF_ERR_NOMEM;
+      }
+    }
+  }
+  return BDF_OK;
+}
+
+/*
+ * pieces of the reference: the text of a run in the pieces that form KC
+ * normalises on their own, each added to the searchable text. A character
+ * is a piece, unless it changes with those before it: its normal form starts
+ * with a mark, or the piece with it is not the piece's normal form and its
+ * own one after the other (the letters of a Hangul syllable). The pieces
+ * normalised one after another are the text normalised, but for a piece cut
+ * at BDFI_MAX_PIECE characters.
+ */
+static bdf_status bdfi_search_run(bdf_text_search *s, uint32_t ri, const char *text, size_t len,
+                                  bdfi_points *one, bdfi_points *more) {
+  uint32_t src[BDFI_MAX_PIECE + 1];
+  uint32_t norm[(BDFI_MAX_PIECE + 1) * BDFI_NFKC_MOST], alone[BDFI_NFKC_MOST];
+  size_t nsrc = 0, nnorm = 0, start = 0, off = 0, used;
+  for (; off < len; off += used) {
+    uint32_t c = bdfi_utf8_next(text, len, off, &used);
+    /* (ASCII is as it is, and changes nothing before it) */
+    int ascii = c < 0x80;
+    /* most other characters are as they are too, and change what is before
+     * them only when they compose with the last of it: the answer of the
+     * comparison below, without normalising */
+    int alone_is_c = ascii || bdfi_nfkc_alone(c);
+    size_t nalone = 1;
+    alone[0] = c;
+    if (!alone_is_c) {
+      if (bdfi_nfkc_points(one, &c, 1) < 0) {
+        return BDF_ERR_NOMEM;
+      }
+      if (one->n == 0 || one->n > BDFI_NFKC_MOST) {
+        return BDF_ERR_FORMAT; /* (no character becomes none, or that many) */
+      }
+      nalone = one->n;
+      memcpy(alone, one->c, nalone * sizeof *alone);
+    }
+    if (nsrc > 0) {
+      if (!ascii && nsrc < BDFI_MAX_PIECE &&
+          !(alone_is_c && !bdfi_composes(norm[nnorm - 1], c))) {
+        src[nsrc] = c;
+        if (bdfi_nfkc_points(more, src, nsrc + 1) < 0) {
+          return BDF_ERR_NOMEM;
+        }
+        if (more->n == 0 || more->n > sizeof norm / sizeof norm[0]) {
+          return BDF_ERR_FORMAT;
+        }
+        if (bdfi_is_mark(alone[0]) || more->n != nnorm + nalone ||
+            memcmp(more->c, norm, nnorm * sizeof *norm) != 0 ||
+            memcmp(more->c + nnorm, alone, nalone * sizeof *alone) != 0) {
+          nsrc++;
+          nnorm = more->n;
+          memcpy(norm, more->c, nnorm * sizeof *norm);
+          continue;
+        }
+      }
+      bdf_status st = bdfi_search_piece(s, norm, nnorm, ri, start, off);
+      if (st != BDF_OK) {
+        return st;
+      }
+    }
+    start = off;
+    src[0] = c;
+    nsrc = 1;
+    nnorm = nalone;
+    memcpy(norm, alone, nalone * sizeof *norm);
+  }
+  return nsrc > 0 ? bdfi_search_piece(s, norm, nnorm, ri, start, off) : BDF_OK;
 }
 
 bdf_status bdf_text_search_new(const bdf_text_index *index, int case_sensitive, bdf_text_search **out,
@@ -253,6 +372,7 @@ bdf_status bdf_text_search_new(const bdf_text_index *index, int case_sensitive, 
   s->index = index;
   s->case_sensitive = case_sensitive ? 1 : 0;
   bdf_status st = BDF_OK;
+  bdfi_points one = {0}, more = {0};
   for (size_t ri = 0; ri < runs && st == BDF_OK; ri++) {
     bdf_index_run run;
     if (bdf_text_index_run(index, ri, &run) != BDF_OK || ri >= BDFI_NO_RUN ||
@@ -262,29 +382,17 @@ bdf_status bdf_text_search_new(const bdf_text_index *index, int case_sensitive, 
     }
     if (ri > 0 && run.sep != BDF_SEP_NONE) {
       /* a paragraph break is a character no query holds; a space is a space */
-      if (bdfi_search_push(s, run.sep == BDF_SEP_BREAK ? 0 : ' ', BDFI_NO_RUN, 0) < 0) {
+      if (bdfi_search_push(s, run.sep == BDF_SEP_BREAK ? 0 : ' ', BDFI_NO_RUN, 0, 0) < 0) {
         st = BDF_ERR_NOMEM;
-      }
-    }
-    /* a byte order mark at the start of a string is not text: the decoder of
-     * the reference's viewer drops it, and so a phrase is found across it */
-    size_t used, off = run.text_len >= 3 && memcmp(run.text, "\xEF\xBB\xBF", 3) == 0 ? 3 : 0;
-    for (; off < run.text_len && st == BDF_OK; off += used) {
-      uint32_t one;
-      const uint32_t *to;
-      size_t n = bdfi_fold(bdfi_utf8_next(run.text, run.text_len, off, &used), s->case_sensitive,
-                           &one, &to);
-      if (n > BDFI_MAX_SEARCH_TEXT - s->n) {
-        st = BDF_ERR_FORMAT;
         break;
       }
-      for (size_t k = 0; k < n && st == BDF_OK; k++) {
-        if (bdfi_search_push(s, to[k], (uint32_t)ri, (uint32_t)off) < 0) {
-          st = BDF_ERR_NOMEM;
-        }
-      }
     }
+    st = bdfi_search_run(s, (uint32_t)ri, run.text, run.text_len, &one, &more);
   }
+  free(one.c);
+  free(one.cc);
+  free(more.c);
+  free(more.cc);
   if (st != BDF_OK) {
     bdf_text_search_free(s);
     bdfi_error_set(err, st, 0, st == BDF_ERR_NOMEM ? "out of memory" : "text too long to search");
@@ -395,18 +503,14 @@ static int bdfi_search_locate(const bdf_text_search *s, size_t start, size_t end
       continue;
     }
     bdf_index_run run;
-    size_t used = 1;
     if (bdf_text_index_run(s->index, ri, &run) != BDF_OK) {
       continue;
     }
-    size_t off = s->off_of[i];
-    if (off < run.text_len) {
-      (void)bdfi_utf8_next(run.text, run.text_len, off, &used);
-    }
+    size_t off = s->off_of[i], piece_end = s->end_of[i];
     bdf_text_hit_segment *last = hit->nsegments ? &hit->segments[hit->nsegments - 1] : NULL;
     if (last && last->run == ri) {
-      if (off + used > last->end) {
-        last->end = off + used;
+      if (piece_end > last->end) {
+        last->end = piece_end;
       }
       continue;
     }
@@ -424,7 +528,7 @@ static int bdfi_search_locate(const bdf_text_search *s, size_t start, size_t end
     seg->b = run.b;
     seg->ordinal = run.ordinal;
     seg->start = off;
-    seg->end = off + used;
+    seg->end = piece_end;
   }
   if (hit->nsegments == 0) {
     free(hit->segments);

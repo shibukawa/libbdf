@@ -11,7 +11,9 @@
 //
 // With --indexes, it reads text index parts and queries instead (a line of
 // JSON each: {"index": base64, "queries": [...], "caseSensitive": bool}) and
-// writes the hits to the standard output: TestSearchRandom runs it so.
+// writes the hits to the standard output: TestSearchRandom runs it so. With
+// --normalize, it reads texts (a line of JSON each) and writes what a search
+// makes of each, without and with case: TestSearchNormalizeAll runs it so.
 //
 // The offsets of a hit are written in bytes of the run's UTF-8, as libbdf
 // gives them. The context of a hit is left out where the searchable text has
@@ -64,6 +66,17 @@ async function indexes() {
     } catch (e) {
       lines.push(`== ${i} error ${e.constructor.name}`);
     }
+  }
+  await new Promise((done) => process.stdout.write(lines.join("\n") + "\n", done));
+}
+
+async function normalized() {
+  const line = (s) => JSON.stringify(s);
+  const lines = [];
+  for (const text of (await readFile(data, "utf8")).split("\n")) {
+    if (text === "") continue;
+    const s = JSON.parse(text);
+    lines.push(`${line(normalizeQuery(s, false))} ${line(normalizeQuery(s, true))}`);
   }
   await new Promise((done) => process.stdout.write(lines.join("\n") + "\n", done));
 }
@@ -134,4 +147,4 @@ async function documents() {
   console.error(`${lines.filter((s) => s.startsWith("== ")).length} indexes, ${lines.filter((s) => s.startsWith("H ")).length} hits, ${lines.length} lines`);
 }
 
-await (out === "--indexes" ? indexes() : documents());
+await (out === "--indexes" ? indexes() : out === "--normalize" ? normalized() : documents());
