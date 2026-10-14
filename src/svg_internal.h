@@ -144,10 +144,8 @@ typedef struct bdfi_svg_options {
  *
  *   BDF_OK             and the document (bdfi_svg_free frees it),
  *   BDF_ERR_FORMAT     for a document without an svg root element
- *                      (ErrNotSVG), for one that declares an encoding this
- *                      library does not read and is not ASCII, and where
- *                      the reference panics (a style rule whose selector is
- *                      ">" alone),
+ *                      (ErrNotSVG), and for one that declares an encoding
+ *                      this library does not read and is not ASCII,
  *   BDF_ERR_TOO_LARGE  past the limits of this library (above),
  *   BDF_ERR_NOMEM.
  *
@@ -161,7 +159,6 @@ BDF_INTERNAL void bdfi_svg_free(bdfi_svg_doc *doc);
 /* The messages of bdfi_svg_parse (static strings, compared by address). */
 BDF_INTERNAL const char *bdfi_svg_msg_not_svg(void);  /* ErrNotSVG */
 BDF_INTERNAL const char *bdfi_svg_msg_encoding(void); /* an encoding that is not read */
-BDF_INTERNAL const char *bdfi_svg_msg_selector(void); /* where parseCSS's caller panics */
 BDF_INTERNAL const char *bdfi_svg_msg_entities(void); /* entities for more than a megabyte */
 BDF_INTERNAL const char *bdfi_svg_msg_sheets(void);   /* more declarations than are kept */
 BDF_INTERNAL const char *bdfi_svg_msg_input(void);    /* more bytes than are read */
@@ -290,8 +287,7 @@ BDF_INTERNAL int bdfi_svg_style_decls(bdfi_svg_pool *pool, bdfi_svg_str s,
  * document (src) and stores on each element of the tree the declarations of
  * the rules that match it, with at most `most` rules matched against
  * elements. *over is set when that was not enough (sheet.matches >
- * sheet.most). It returns BDF_OK, BDF_ERR_FORMAT where the reference panics
- * (a rule without a selector), BDF_ERR_TOO_LARGE or BDF_ERR_NOMEM.
+ * sheet.most). It returns BDF_OK, BDF_ERR_TOO_LARGE or BDF_ERR_NOMEM.
  */
 BDF_INTERNAL bdf_status bdfi_svg_apply_css(bdfi_svg_pool *pool, bdfi_svg_str src,
                                            bdfi_svg_node *root, int64_t most, int *over,

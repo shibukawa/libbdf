@@ -136,9 +136,8 @@ static void bdfi_svg_fuzz_read(bdfi_svg_fuzz_sink *sink, const uint8_t *data, si
   if (st != BDF_OK) {
     if (doc || err.status != st ||
         (err.message != bdfi_svg_msg_not_svg() && err.message != bdfi_svg_msg_encoding() &&
-         err.message != bdfi_svg_msg_selector() && err.message != bdfi_svg_msg_entities() &&
-         err.message != bdfi_svg_msg_sheets() && err.message != bdfi_svg_msg_input() &&
-         st != BDF_ERR_NOMEM)) {
+         err.message != bdfi_svg_msg_entities() && err.message != bdfi_svg_msg_sheets() &&
+         err.message != bdfi_svg_msg_input() && st != BDF_ERR_NOMEM)) {
       abort();
     }
     return;

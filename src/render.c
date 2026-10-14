@@ -266,6 +266,10 @@ bdfi_picture *bdfi_r_decode(struct bdf_renderer *r, const uint8_t *data, size_t 
     *full = 1;
     return NULL;
   }
+  if (bdfi_jpeg_scans_end(data, len, BDFI_MAX_JPEG_SCANS) != SIZE_MAX) {
+    bdfi_r_warnf(r, "a JPEG image has more than %lld scans: the rest of them are not read",
+                 (long long)BDFI_MAX_JPEG_SCANS);
+  }
   bdfi_picture *p = NULL;
   int format = BDFI_IMAGE_NONE;
   bdf_status st = bdfi_picture_decode(data, len, &p, &format);

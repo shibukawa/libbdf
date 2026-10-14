@@ -117,11 +117,11 @@ ellipse {} line { }
 *{ j: 1 } ** { k: 1 } *rect { l: 1 } rect* { m: 1 } `+"g\u00a0rect\u2003.a { n: 1 } r\xffct { o: 1 } .\xc3 { p: 1 }"+` RECT { q: 1 } Rect { r: 1 } .A { s: 1 }</style>
 <g><rect class="a" id="b"/><rect class="a c" id="b"/><circle/></g><RECT/><rect class="A"/></svg>`)
 	add("css-class-attr", head+`<style>.a{p:1}.b{q:2}.c{r:3}</style><rect class="a"/><rect class=" a  b "/><rect class="a`+"\u00a0b\u2003c\tA"+`"/><rect class=""/><rect class="  "/><rect class="b b b a a"/><rect class="`+"\xffa \xc3"+`"/></svg>`)
-	add("css-panic", head+`<style>> { a: b }</style><rect/></svg>`)
-	add("css-panic-2", head+`<style>rect { a: b } g, > > , circle { c: d }</style><rect/></svg>`)
-	add("css-panic-space", head+"<style>rect{a:b} \u00a0>\u2003> {c:d}</style><rect/></svg>")
-	add("css-panic-not-svg", `<notsvg><style>> { a: b }</style></notsvg>`)
-	add("css-no-panic", head+`<style>> g { a: b } g > { c: d } >g>rect> { e: f }</style><g><rect/></g></svg>`)
+	add("css-combinators", head+`<style>> { a: b }</style><rect/></svg>`)
+	add("css-combinators-2", head+`<style>rect { a: b } g, > > , circle { c: d }</style><rect/></svg>`)
+	add("css-combinators-space", head+"<style>rect{a:b} \u00a0>\u2003> {c:d}</style><rect/></svg>")
+	add("css-combinators-not-svg", `<notsvg><style>> { a: b }</style></notsvg>`)
+	add("css-combinators-beside", head+`<style>> g { a: b } g > { c: d } >g>rect> { e: f }</style><g><rect/></g></svg>`)
 	add("css-unterminated", head+`<style>rect { fill: red } circle { fill: blue</style><rect/><circle/></svg>`)
 	add("css-braces", head+`<style>rect { a: { b } } } circle { c: d } } { e: f } ellipse { g: h }</style><rect/><circle/><ellipse/></svg>`)
 	add("css-empty", head+`<style></style><style> </style><style><![CDATA[]]></style><rect/></svg>`)
@@ -419,7 +419,7 @@ func TestBuiltDocuments(t *testing.T) {
 func TestStatuses(t *testing.T) {
 	docs := builtDocs()
 	for name, want := range map[string]string{
-		"renderer": "doc", "css-panic": "panic", "css-panic-2": "panic", "css-panic-space": "panic", "css-panic-not-svg": "notsvg", "css-no-panic": "doc",
+		"renderer": "doc", "css-combinators": "doc", "css-combinators-2": "doc", "css-combinators-space": "doc", "css-combinators-not-svg": "notsvg", "css-combinators-beside": "doc",
 		"not-svg": "notsvg", "not-svg-case": "notsvg", "no-root": "notsvg", "empty": "notsvg", "prefixes": "doc", "prefix-not-svg": "notsvg",
 		"unclosed": "doc", "stray-end-first": "notsvg", "utf16le-mark": "doc", "utf16be-declared": "doc", "latin1-latin1": "doc",
 		"unknown-\"no-such\"": "notsvg", "unknown-after-root-\"no-such\"": "doc", "entities-too-large": "doc",

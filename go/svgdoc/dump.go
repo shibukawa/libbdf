@@ -245,8 +245,8 @@ func (d *dumper) tree(top *svg.Node, place map[*svg.Node]int) {
 }
 
 // goDump is the reference's document of data as text: what svgport_dump
-// writes of the C reader's. A panic of the reference, which its renderer
-// recovers from and takes the image as unreadable, is "panic".
+// writes of the C reader's. A panic of the reference is "panic", which the
+// C reader never says: none is known, and one that is found is a finding.
 func goDump(data []byte, opts *svg.Options, deep, exact bool) (out string) {
 	doc, err, panicked := func() (doc *svg.Document, err error, panicked bool) {
 		defer func() {

@@ -706,6 +706,88 @@ static void test_images(void) {
   free(keep.b);
 }
 
+/* A grey progressive JPEG image of 16 by 16 whose coefficients are all
+ * zero, in n scans that each say "nothing more in any block": the grey of
+ * 128. It returns the bytes written (12 a scan, and 110). */
+static size_t scans_jpeg(uint8_t *out, int n) {
+  static const uint8_t frame[] = {0xff, 0xc2, 0, 11, 8, 0, 16, 0, 16, 1, 1, 0x11, 0};
+  static const uint8_t scan[] = {0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0, 0, 0};
+  size_t k = 0;
+  out[k++] = 0xff;
+  out[k++] = 0xd8;
+  /* a quantization table of ones */
+  out[k++] = 0xff;
+  out[k++] = 0xdb;
+  out[k++] = 0;
+  out[k++] = 67;
+  out[k++] = 0;
+  memset(out + k, 1, 64);
+  k += 64;
+  memcpy(out + k, frame, sizeof frame);
+  k += sizeof frame;
+  /* a Huffman table for AC coefficients with one code: the end of the
+   * bands of 16384 blocks and more */
+  out[k++] = 0xff;
+  out[k++] = 0xc4;
+  out[k++] = 0;
+  out[k++] = 20;
+  out[k++] = 0x10;
+  out[k++] = 1;
+  memset(out + k, 0, 15);
+  k += 15;
+  out[k++] = 0xe0;
+  for (int i = 0; i < n; i++) {
+    memcpy(out + k, scan, sizeof scan);
+    k += sizeof scan;
+  }
+  out[k++] = 0xff;
+  out[k++] = 0xd9;
+  return k;
+}
+
+/* A JPEG image is read as far as its first hundred scans, and the renderer
+ * says so of one that has more. */
+static void test_jpeg_scans(void) {
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  bdf_image img;
+  static uint8_t many[110 + 12 * 150], few[110 + 12 * 100];
+  add_image(&d, 1, many, scans_jpeg(many, 150));
+  add_image(&d, 2, few, scans_jpeg(few, 100));
+  char views[512], name[2][33];
+  for (uint32_t i = 0; i < 2; i++) {
+    ob o = {0};
+    ob_fill_color(&o, 0x000000ff);
+    ob_rect(&o, BDF_OP_FILL_RECT, 0, 0, 4, 4);
+    ob_draw_image(&o, ob_image(&o, 1 + i), 1, 1, 2, 2);
+    docb_object(&d, 20 + i, &o);
+    part_name(20 + i, name[i]);
+  }
+  snprintf(views, sizeof views,
+           "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":["
+           "{\"w\":4,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]},"
+           "{\"w\":4,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]}]",
+           name[0], name[1]);
+  bdf_doc *doc = docb_open(&d, views, &keep);
+  bdf_renderer *r = NULL;
+  CHECK(bdf_renderer_new(doc, NULL, &r, &err) == BDF_OK);
+  /* a hundred scans: read whole, and nothing said */
+  CHECK(bdf_render_page(r, 0, 1, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 1, 1) == 0x808080ff && pixel(&img, 2, 2) == 0x808080ff && pixel(&img, 0, 0) == 0x000000ff);
+  CHECK(bdf_renderer_warning_count(r) == 0);
+  bdf_image_free(&img);
+  /* a hundred and fifty: the same picture, of these scans, and a warning */
+  CHECK(bdf_render_page(r, 0, 0, 1, &img, &err) == BDF_OK);
+  CHECK(pixel(&img, 1, 1) == 0x808080ff && pixel(&img, 2, 2) == 0x808080ff && pixel(&img, 3, 3) == 0x000000ff);
+  CHECK(warned(r, "a JPEG image has more than 100 scans: the rest of them are not read"));
+  CHECK(bdf_renderer_warning_count(r) == 1);
+  bdf_image_free(&img);
+  bdf_renderer_free(r);
+  bdf_doc_free(doc);
+  free(keep.b);
+}
+
 /* SVG images: shapes, a translucent element, a clip path, use, a transform,
  * path data, a nested viewport, a gradient, text in a font of the
  * application, an image inside; an SVG image in part and as a pattern; and
@@ -993,6 +1075,7 @@ int main(void) {
   test_pixels();
   test_pages();
   test_images();
+  test_jpeg_scans();
   test_reference_objects();
   test_reference_document();
   test_reference_images();

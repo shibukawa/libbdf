@@ -20,6 +20,16 @@
 #endif
 #define BDFI_MAX_DECODE_PIXELS ((int64_t)BDF_MAX_DECODE_PIXELS)
 
+/* imgconv.MaxJPEGScans: the scans of a JPEG image that are read. A decoder
+ * goes through every block of an image once a scan, however little the
+ * scan says, so a small file of nothing but scans takes as long as
+ * thousands of images; encoders write about ten. (BDF_MAX_JPEG_SCANS lowers
+ * it; what is drawn is then not what the reference draws.) */
+#ifndef BDF_MAX_JPEG_SCANS
+#define BDF_MAX_JPEG_SCANS 100
+#endif
+#define BDFI_MAX_JPEG_SCANS ((size_t)BDF_MAX_JPEG_SCANS)
+
 /* A decoded image: premultiplied RGBA, 8 bits a channel, rows from the top,
  * 4*w bytes a row and nothing between the rows. */
 typedef struct bdfi_bitmap {
@@ -56,6 +66,11 @@ BDF_INTERNAL int bdfi_png_config(const uint8_t *data, size_t len, int32_t *w, in
 BDF_INTERNAL bdf_status bdfi_png_decode(const uint8_t *data, size_t len, bdfi_bitmap *out);
 BDF_INTERNAL int bdfi_jpeg_config(const uint8_t *data, size_t len, int32_t *w, int32_t *h);
 BDF_INTERNAL bdf_status bdfi_jpeg_decode(const uint8_t *data, size_t len, bdfi_bitmap *out);
+/* jpegScansEnd of imgconv: where the marker of the scan after the first max
+ * scans of a JPEG image is, or SIZE_MAX for an image that has no such scan
+ * (and for what is no JPEG image). bdfi_jpeg_decode reads an image up to
+ * there, for BDFI_MAX_JPEG_SCANS. */
+BDF_INTERNAL size_t bdfi_jpeg_scans_end(const uint8_t *data, size_t len, size_t max);
 BDF_INTERNAL int bdfi_gif_config(const uint8_t *data, size_t len, int32_t *w, int32_t *h);
 BDF_INTERNAL bdf_status bdfi_gif_decode(const uint8_t *data, size_t len, bdfi_bitmap *out);
 BDF_INTERNAL int bdfi_bmp_config(const uint8_t *data, size_t len, int32_t *w, int32_t *h);

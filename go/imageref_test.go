@@ -60,6 +60,10 @@ func reference(format string, data []byte) (pix []byte, w, h int, status int) {
 		}
 	}()
 	d := codecs[format]
+	if format == "jpeg" {
+		// a JPEG image is read as far as its first scans
+		data, _ = imgconv.LimitJPEGScans(data)
+	}
 	if c, err := d.config(bytes.NewReader(data)); err == nil {
 		if c.Width <= 0 || c.Height <= 0 || c.Width > maxDecodePixels/c.Height {
 			return nil, 0, 0, statusTooLarge

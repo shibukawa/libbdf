@@ -11,7 +11,9 @@ import (
 	"image/jpeg"
 	"image/png"
 	"math/rand/v2"
+	"slices"
 
+	"github.com/shibukawa/bdf/image/imgconv"
 	"golang.org/x/image/bmp"
 )
 
@@ -260,6 +262,33 @@ func RandomImage(r *rand.Rand, formats ...string) []byte {
 		return []byte("neither an image nor anything else")
 	case 4:
 		return nil
+	case 5:
+		if slices.Contains(formats, "jpeg") {
+			// more scans than are read of a JPEG image, or just as many
+			return ScansJPEG(8+r.IntN(40), 8+r.IntN(40), imgconv.MaxJPEGScans+r.IntN(3)*20)
+		}
 	}
 	return b
+}
+
+// ScansJPEG returns a grey progressive JPEG image of w × h whose
+// coefficients are all zero, sent in n scans of its AC coefficients: each
+// says that the rest of the blocks have nothing more, as often as it takes
+// to pass them all. It draws a grey of 128.
+func ScansJPEG(w, h, n int) []byte {
+	var b bytes.Buffer
+	b.Write([]byte{0xff, 0xd8, 0xff, 0xdb, 0, 67, 0})
+	b.Write(bytes.Repeat([]byte{1}, 64))
+	b.Write([]byte{0xff, 0xc2, 0, 11, 8, byte(h >> 8), byte(h), byte(w >> 8), byte(w), 1, 1, 0x11, 0})
+	b.Write([]byte{0xff, 0xc4, 0, 20, 0x10, 1})
+	b.Write(make([]byte, 15))
+	b.WriteByte(0xe0)
+	runs := (((w+7)/8)*((h+7)/8) + 16383) / 16384
+	bits := make([]byte, (15*runs+7)/8)
+	for i := 0; i < n; i++ {
+		b.Write([]byte{0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0})
+		b.Write(bits)
+	}
+	b.Write([]byte{0xff, 0xd9})
+	return b.Bytes()
 }
