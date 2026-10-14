@@ -120,10 +120,17 @@ static void test_password(void) {
   CHECK(bdf_doc_unlock(plain, "x", 1, &err) == BDF_ERR_ARG);
   CHECK_MSG(err, "the document is not locked");
 
-  /* the password as it decomposes opens the document: it is put in form C */
+  /* the password as it decomposes opens the document: it is put in form KC */
   CHECK(bdf_doc_unlock(doc, (const char *)uv_password_nfd, uv_password_nfd_len, &err) == BDF_OK);
   check_whole(doc, plain);
   CHECK(bdf_doc_unlock(doc, (const char *)uv_password, uv_password_len, &err) == BDF_ERR_ARG);
+  bdf_doc_free(doc);
+
+  /* and so does the password in full-width letters and half-width katakana,
+   * with an ideographic space */
+  doc = open_mem(uv_locked, uv_locked_len);
+  CHECK(bdf_doc_unlock(doc, (const char *)uv_password_wide, uv_password_wide_len, &err) == BDF_OK);
+  check_whole(doc, plain);
   bdf_doc_free(doc);
 
   doc = open_mem(uv_locked, uv_locked_len);

@@ -1,7 +1,8 @@
 /*
- * Unicode normalisation form C, for passwords (spec §3.5: a password is
- * normalised to NFC before a key is derived from it). The tables are those
- * of the reference implementation's library (unicode_nfc.h is generated
+ * Unicode normalisation form KC: for passwords (spec §3.5: a password is
+ * normalised to NFKC before a key is derived from it), for the family names
+ * of fonts and for a search. The tables are those of the reference
+ * implementation's library (unicode_nfc.h and unicode_text.h are generated
  * from it); the algorithm is that of UAX #15.
  */
 #include <stdlib.h>
@@ -300,11 +301,11 @@ static int bdfi_reorder(bdfi_cps *b) {
   return 0;
 }
 
-/* The decomposition of a character, canonical or with compat that of form
- * KD, added to d. */
-static int bdfi_decompose(bdfi_cps *d, uint32_t c, int compat) {
+/* The decomposition of a character in form KD (the compatibility one, or
+ * the canonical one where that is all it has), added to d. */
+static int bdfi_decompose(bdfi_cps *d, uint32_t c) {
   size_t m = 0;
-  const uint32_t *seq = compat ? bdfi_nfkd_of(c, &m) : NULL;
+  const uint32_t *seq = bdfi_nfkd_of(c, &m);
   if (!seq) {
     seq = bdfi_nfd_of(c, &m);
   }
@@ -359,7 +360,7 @@ static size_t bdfi_compose(bdfi_cps *d) {
 int bdfi_nfkc_points(bdfi_points *w, const uint32_t *in, size_t n) {
   w->n = 0;
   for (size_t i = 0; i < n; i++) {
-    if (bdfi_decompose(w, in[i], 1) < 0) {
+    if (bdfi_decompose(w, in[i]) < 0) {
       return -1;
     }
   }
@@ -396,9 +397,9 @@ int bdfi_nfkc_alone(uint32_t c) {
 
 int bdfi_composes(uint32_t a, uint32_t b) { return bdfi_compose_pair(a, b) != 0; }
 
-/* Form C, or with compat form KC: the compatibility decompositions are
- * taken first, and what they give composes as in form C. */
-static int bdfi_normalize(const char *s, size_t n, int compat, char **out, size_t *out_len) {
+/* Form KC: the compatibility decompositions are taken, and what they give
+ * composes as in form C. */
+int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len) {
   *out = NULL;
   *out_len = 0;
   const uint8_t *b = (const uint8_t *)s;
@@ -443,7 +444,7 @@ static int bdfi_normalize(const char *s, size_t n, int compat, char **out, size_
       len = 1;
     }
     i += len;
-    if (bdfi_decompose(&d, c, compat) < 0) {
+    if (bdfi_decompose(&d, c) < 0) {
       goto done;
     }
   }
@@ -472,14 +473,6 @@ done:
   free(d.c);
   free(d.cc);
   return rc;
-}
-
-int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len) {
-  return bdfi_normalize(s, n, 0, out, out_len);
-}
-
-int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len) {
-  return bdfi_normalize(s, n, 1, out, out_len);
 }
 
 /* unicode.ToLower of the reference's language. */

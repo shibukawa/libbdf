@@ -265,20 +265,21 @@ func TestP256MatchesGo(t *testing.T) {
 
 // goInsertedJoiner reports whether x/text put a combining grapheme joiner
 // into its output: it breaks runs of more than 30 combining marks with one
-// (the stream-safe format), which is not NFC and which libbdf does not do.
+// (the stream-safe format), which is not NFKC and which libbdf does not do.
 func goInsertedJoiner(in, out string) bool {
 	return strings.Count(out, "\u034f") != strings.Count(in, "\u034f")
 }
 
-// nfcAlphabet holds characters that normalisation does something with.
-var nfcAlphabet = []rune("aeAEoOuUnNcC éÅṩǕ" + // precomposed Latin
+// normAlphabet holds characters that normalisation does something with.
+var normAlphabet = []rune("aeAEoOuUnNcC éÅṩǕ" + // precomposed Latin
 	"\u0300\u0301\u0302\u0303\u0308\u030a\u0323\u0327\u0328\u031b\u0338\u0345\u05b0\u05b4\u0e38\u0f71\u0f72\u0f74" + // marks of many classes
 	"かハウ\u3099\u309aパガ" + // kana and their marks
 	"ᄀ하ᅵᆨᇂ가힣각" + // Hangul
 	"豈﨎יִשׁÅΩ\u0340\u0341\u0343\u0344ʹ;ά\u2000〈" + // singletons and exclusions
+	"\uff50\uff11\uff76\uff9e\uff9f\u2460\ufb01\u3314\u3000\u00b2\ufdfa\u2126\u017f" + // what only form KC changes
 	"\U0001d15e\U0001d1bb\U0002f800\U000110ab\U00011099\U000110ba\U0001f600")
 
-func TestNFCMatchesXText(t *testing.T) {
+func TestNFKCMatchesXText(t *testing.T) {
 	r := rng()
 	n, skipped := 0, 0
 	for range 200000 {
@@ -287,17 +288,17 @@ func TestNFCMatchesXText(t *testing.T) {
 			if r.IntN(8) == 0 {
 				sb.WriteRune(rune(r.IntN(0x3000)))
 			} else {
-				sb.WriteRune(nfcAlphabet[r.IntN(len(nfcAlphabet))])
+				sb.WriteRune(normAlphabet[r.IntN(len(normAlphabet))])
 			}
 		}
 		s := sb.String()
-		want := norm.NFC.String(s)
+		want := norm.NFKC.String(s)
 		if goInsertedJoiner(s, want) {
 			skipped++
 			continue
 		}
-		if got := NFC(s); got != want {
-			t.Fatalf("NFC(%+q) = %+q, want %+q", s, got, want)
+		if got := NFKC(s); got != want {
+			t.Fatalf("NFKC(%+q) = %+q, want %+q", s, got, want)
 		}
 		n++
 	}
@@ -307,36 +308,36 @@ func TestNFCMatchesXText(t *testing.T) {
 			continue
 		}
 		s := string(c)
-		if got, want := NFC(s), norm.NFC.String(s); got != want {
-			t.Fatalf("NFC(%+q) = %+q, want %+q", s, got, want)
+		if got, want := NFKC(s), norm.NFKC.String(s); got != want {
+			t.Fatalf("NFKC(%+q) = %+q, want %+q", s, got, want)
 		}
 	}
 	// bytes that are not UTF-8 stay, and do not stop what is around them
 	for _, s := range []string{"\xff", "e\u0301\xc3", "\xe3\x81e\u0301", "a\x80\u0301", "\xed\xa0\x80か\u3099"} {
-		if got, want := NFC(s), norm.NFC.String(s); got != want {
-			t.Errorf("NFC(%+q) = %+q, want %+q", s, got, want)
+		if got, want := NFKC(s), norm.NFKC.String(s); got != want {
+			t.Errorf("NFKC(%+q) = %+q, want %+q", s, got, want)
 		}
 	}
 	// a long run of marks out of order is put in order in time in proportion to it
 	long := "a" + strings.Repeat("\u0301\u0323", 200000)
 	// (the first dot below composes with the letter: three bytes for three)
-	if got := NFC(long); !strings.HasPrefix(got, "\u1ea1\u0323") || !strings.HasSuffix(got, "\u0301\u0301") || len(got) != len(long) {
+	if got := NFKC(long); !strings.HasPrefix(got, "\u1ea1\u0323") || !strings.HasSuffix(got, "\u0301\u0301") || len(got) != len(long) {
 		t.Errorf("a long run of marks: %d bytes, starting %+q", len(got), got[:6])
 	}
 	t.Logf("%d strings compared, %d skipped where x/text inserts a joiner", n, skipped)
 }
 
-func FuzzNFC(f *testing.F) {
+func FuzzNFKC(f *testing.F) {
 	for _, s := range []string{"", "abc", "e\u0301", "ハ\u309aスワート\u3099", "각", "\xff\u0301", "a\u0323\u0301\u0327"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		want := norm.NFC.String(s)
+		want := norm.NFKC.String(s)
 		if goInsertedJoiner(s, want) {
 			return
 		}
-		if got := NFC(s); got != want {
-			t.Fatalf("NFC(%+q) = %+q, want %+q", s, got, want)
+		if got := NFKC(s); got != want {
+			t.Fatalf("NFKC(%+q) = %+q, want %+q", s, got, want)
 		}
 	})
 }

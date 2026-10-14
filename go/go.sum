@@ -2,8 +2,8 @@ github.com/andybalholm/brotli v1.2.5 h1:BSI8V4zmx/3BAn6OKjF1PmfVq7Aoi52AdFsi6bpC
 github.com/andybalholm/brotli v1.2.5/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLMPdiQ=
 github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
-github.com/shibukawa/bdf v0.1.7-0.20261014001326-aefd7ac8d261 h1:qPfX236MRAddodzKST60hAFGyAohc/Rx48EluBWBYNo=
-github.com/shibukawa/bdf v0.1.7-0.20261014001326-aefd7ac8d261/go.mod h1:aoThBCOtkpSdPW/oclIZnIP0CF975a8SLa7Rk9fUylc=
+github.com/shibukawa/bdf v0.1.7-0.20261014002542-96d3af1aac7b h1:c01ftZBT2ZoQC4VUD6coNjsL6/VnXwLE4+LOw501lno=
+github.com/shibukawa/bdf v0.1.7-0.20261014002542-96d3af1aac7b/go.mod h1:aoThBCOtkpSdPW/oclIZnIP0CF975a8SLa7Rk9fUylc=
 github.com/shibukawa/tinygodriver v1.3.5 h1:esCDC+7L7PmoIKaW1QxNOoU5TpEwCyF4VevSk5e0I74=
 github.com/shibukawa/tinygodriver v1.3.5/go.mod h1:BHF2120Trf0Np+CO1uxsmtd2G/gfslLuMl5zaA0T7ik=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=

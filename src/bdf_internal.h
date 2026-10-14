@@ -429,10 +429,8 @@ BDF_INTERNAL bdf_status bdfi_woff2_rebuild_hmtx(const uint8_t *t, size_t n, cons
 
 /* ---- Unicode ------------------------------------------------------------ */
 
-/* bdfi_nfc normalises UTF-8 to form C into a buffer of its own (NUL after
+/* bdfi_nfkc normalises UTF-8 to form KC into a buffer of its own (NUL after
  * it): 0, or -1 when out of memory. Bytes that are not UTF-8 are kept. */
-BDF_INTERNAL int bdfi_nfc(const char *s, size_t n, char **out, size_t *out_len);
-/* bdfi_nfkc does the same for form KC. */
 BDF_INTERNAL int bdfi_nfkc(const char *s, size_t n, char **out, size_t *out_len);
 /* Characters, with the combining class of each: what normalisation works
  * on. */

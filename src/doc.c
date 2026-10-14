@@ -578,7 +578,7 @@ bdf_status bdf_doc_unlock(bdf_doc *d, const char *password, size_t len, bdf_erro
   }
   char *pw;
   size_t pw_len;
-  if (bdfi_nfc(password ? password : "", len, &pw, &pw_len) < 0) {
+  if (bdfi_nfkc(password ? password : "", len, &pw, &pw_len) < 0) {
     bdfi_error_set(err, BDF_ERR_NOMEM, 0, "out of memory");
     return BDF_ERR_NOMEM;
   }

@@ -385,7 +385,7 @@ func TestSearchNormalizeMatchesXText(t *testing.T) {
 			case 1:
 				sb.WriteString(pick(r, searchAlphabet))
 			default:
-				sb.WriteRune(nfcAlphabet[r.IntN(len(nfcAlphabet))])
+				sb.WriteRune(normAlphabet[r.IntN(len(normAlphabet))])
 			}
 		}
 		if check(sb.String()) {

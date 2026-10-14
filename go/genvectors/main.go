@@ -83,11 +83,13 @@ func unhex(s string) []byte { return must(hex.DecodeString(s)) }
 // The private key of the reader the test documents are sealed for.
 var private = unhex("c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721")
 
-// The password of the test document, as a keyboard composes it and as it
-// decomposes: both must open it.
+// The password of the test document, as a keyboard composes it, as it
+// decomposes, and as an input method may give it (full-width letters, an
+// ideographic space, half-width katakana): all must open it.
 const (
-	passwordNFC = "pässwörd ガ"
-	passwordNFD = "pa\u0308sswo\u0308rd カ\u3099"
+	passwordNFC  = "pässwörd ガ"
+	passwordNFD  = "pa\u0308sswo\u0308rd カ\u3099"
+	passwordWide = "\uff50a\u0308ss\uff57o\u0308rd\u3000\uff76\uff9e"
 )
 
 func unlockVectors(path string) {
@@ -96,9 +98,10 @@ func unlockVectors(path string) {
 	o.comment("the reader's key pair: a P-256 scalar and its point")
 	o.bytes("uv_private", private)
 	o.bytes("uv_public", priv.PublicKey().Bytes())
-	o.comment("the password, composed (" + passwordNFC + ") and decomposed")
+	o.comment("the password, composed (" + passwordNFC + "), decomposed, and in full and half width")
 	o.bytes("uv_password", []byte(passwordNFC))
 	o.bytes("uv_password_nfd", []byte(passwordNFD))
+	o.bytes("uv_password_wide", []byte(passwordWide))
 
 	// four pages that draw one shared object and a line of text each
 	d := bdf.NewDocument()
@@ -297,7 +300,7 @@ func cryptoVectors(path string) {
 	o.comment("the order of the curve, which is no private key")
 	o.bytes("cv_p256_order", unhex("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"))
 
-	// NFC, with what x/text makes of each input
+	// NFKC, with what x/text makes of each input
 	inputs := []string{
 		"", "plain ASCII", "cafe\u0301", "é", "a\u0308\u0323", "a\u0323\u0308", "ẛ\u0323", "q\u0307\u0323",
 		"가", "각", "각", "힣", "ᆨᄀ",
@@ -306,22 +309,25 @@ func cryptoVectors(path string) {
 		"ד\u05bc", "דּ", "གྷ", "\u09c7\u09be", "\u09cb", "ᬅ\u1b35", "e\u0301\u0301", "Å\u0301", "A\u030a\u0301",
 		"\xff", "a\xc3", "\xe3\x81", "\xf0\x9f\x98", "\xc0\xaf", "\xed\xa0\x80", "ab\x80cd\u0301", "A\u0328\u0301",
 		"ế", "Ē\u0300", "Ḕ", "Ǖ", "U\u0308\u0304", "ΐ", "ι\u0308\u0301", "ᄀ", "각", "a\u0315\u0300\u05ae\u0300b",
+		// what only form KC changes: width, ligatures, squared and circled forms, spaces
+		"\uff50\uff41\uff53\uff53\uff11\uff12\uff13", "\uff76\uff9e\uff72\uff84\uff9e", "\uff8a\uff9f", "\ufb01", "\u3314", "\u2460\u00b2",
+		"a\u3000b", "\u2126", "\u017f\u0307", "\ufdfa", "\u1e9b\u0323", "\u0958", "\uff76\u3099",
 	}
-	fmt.Fprintf(&o.b, "#define CV_NFC_CASES %d\n", len(inputs))
+	fmt.Fprintf(&o.b, "#define CV_NFKC_CASES %d\n", len(inputs))
 	var in, want []byte
 	var inLen, wantLen []string
 	for _, s := range inputs {
-		n := norm.NFC.String(s)
+		n := norm.NFKC.String(s)
 		in = append(in, s...)
 		want = append(want, n...)
 		inLen = append(inLen, fmt.Sprint(len(s)))
 		wantLen = append(wantLen, fmt.Sprint(len(n)))
 	}
-	o.comment("strings and their form C, one after the other, with the length of each")
-	fmt.Fprintf(&o.b, "static const size_t cv_nfc_in_lens[CV_NFC_CASES] = {%s};\n", strings.Join(inLen, ","))
-	fmt.Fprintf(&o.b, "static const size_t cv_nfc_want_lens[CV_NFC_CASES] = {%s};\n", strings.Join(wantLen, ","))
-	o.bytes("cv_nfc_in", in)
-	o.bytes("cv_nfc_want", want)
+	o.comment("strings and their form KC, one after the other, with the length of each")
+	fmt.Fprintf(&o.b, "static const size_t cv_nfkc_in_lens[CV_NFKC_CASES] = {%s};\n", strings.Join(inLen, ","))
+	fmt.Fprintf(&o.b, "static const size_t cv_nfkc_want_lens[CV_NFKC_CASES] = {%s};\n", strings.Join(wantLen, ","))
+	o.bytes("cv_nfkc_in", in)
+	o.bytes("cv_nfkc_want", want)
 	o.write(path, "inputs of the primitives with the answers of Go's standard\n * library and of golang.org/x/text/unicode/norm.")
 }
 
