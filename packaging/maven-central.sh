@@ -8,11 +8,11 @@
 #       (android/libbdf/build/repo, signed when the Gradle properties
 #       signingKey and signingPassword are given), checked and zipped as the
 #       Portal takes a bundle
-#   maven-central.sh upload <bundle.zip>
-#       uploads it, and waits until the Portal has validated it.
-#       $CENTRAL_USERNAME and $CENTRAL_PASSWORD are a user token of the
-#       Portal. $CENTRAL_PUBLISHING is USER_MANAGED (the default: the
-#       deployment waits for its Publish button) or AUTOMATIC.
+#   maven-central.sh upload [--validate-only] <bundle.zip>
+#       uploads it and publishes it once the Portal has validated it;
+#       --validate-only stops after the Portal's checks (namespace, POM,
+#       signatures) and drops the deployment. $CENTRAL_USERNAME and
+#       $CENTRAL_PASSWORD are a user token of the Portal.
 set -euo pipefail
 
 api=https://central.sonatype.com/api/v1/publisher
@@ -41,35 +41,55 @@ bundle() {
 }
 
 upload() {
-  local file=$1 token id state status
+  local validate_only=false
+  if [ "$1" = --validate-only ]; then
+    validate_only=true
+    shift
+  fi
+  local file=${1:?the bundle} token auth id state status type=AUTOMATIC
   : "${CENTRAL_USERNAME:?a user token of the Central Portal: its user name}"
   : "${CENTRAL_PASSWORD:?a user token of the Central Portal: its password}"
   token=$(printf '%s:%s' "$CENTRAL_USERNAME" "$CENTRAL_PASSWORD" | base64 | tr -d '\n')
-  id=$(curl --fail-with-body -sS -X POST -H "Authorization: Bearer $token" \
-    -F "bundle=@$file" "$api/upload?name=$(basename "$file" .zip)&publishingType=${CENTRAL_PUBLISHING:-USER_MANAGED}")
-  echo "deployment $id"
+  auth="Authorization: Bearer $token"
+  if $validate_only; then type=USER_MANAGED; fi
+  id=$(curl --fail-with-body -sS -X POST -H "$auth" \
+    -F "bundle=@$file" "$api/upload?name=$(basename "$file" .zip)&publishingType=$type")
+  echo "deployment $id ($type)"
   for _ in $(seq 1 90); do
-    status=$(curl --fail-with-body -sS -X POST -H "Authorization: Bearer $token" "$api/status?id=$id")
+    status=$(curl --fail-with-body -sS -X POST -H "$auth" "$api/status?id=$id")
     state=$(printf '%s' "$status" | python3 -c 'import json, sys; print(json.load(sys.stdin)["deploymentState"])')
     echo "$state"
     case "$state" in
-    VALIDATED | PUBLISHING | PUBLISHED) return 0 ;;
+    VALIDATED)
+      if $validate_only; then
+        curl --fail-with-body -sS -X DELETE -H "$auth" "$api/deployment/$id"
+        echo "validated; the deployment is dropped"
+        return 0
+      fi
+      ;;
+    PUBLISHED) return 0 ;;
     FAILED)
-      printf '%s\n' "$status" >&2
+      printf '%s\n' "$status" | python3 -m json.tool >&2
+      if $validate_only; then
+        curl --fail-with-body -sS -X DELETE -H "$auth" "$api/deployment/$id" || true
+      fi
       return 1
       ;;
     esac
     sleep 10
   done
-  echo "maven-central: still $state after fifteen minutes" >&2
+  echo "maven-central: deployment $id is still $state after fifteen minutes" >&2
   return 1
 }
 
 case "${1:-}" in
 bundle) bundle "${2:?the repository}" "${3:?the bundle to write}" ;;
-upload) upload "${2:?the bundle}" ;;
+upload)
+  shift
+  upload "$@"
+  ;;
 *)
-  echo "usage: maven-central.sh bundle <repository> <bundle.zip> | upload <bundle.zip>" >&2
+  echo "usage: maven-central.sh bundle <repository> <bundle.zip> | upload [--validate-only] <bundle.zip>" >&2
   exit 2
   ;;
 esac

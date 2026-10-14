@@ -15,7 +15,7 @@ The CI builds a consumer through each of them (`packaging` in
 | Swift, Xcode | `Package.swift` at the root: products `BDF` (Swift), `CBDF`, `CBDFCoreGraphics` | add the repository as a package dependency |
 | Xcode without Swift packages | `bdf.xcframework` | an asset of every release (`packaging/xcframework.sh`) |
 | .NET (MAUI, SkiaSharp) | the NuGet packages `LibBdf` and `LibBdf.SkiaSharp` | `dotnet/`; packed by the release workflow |
-| Android (Kotlin, Java) | `io.github.shibukawa:libbdf`, an AAR for arm64-v8a, armeabi-v7a and x86_64 | `android/`; the AAR and a Maven repository of it are assets of every release |
+| Android (Kotlin, Java) | `io.github.shibukawa.libbdf:libbdf` on Maven Central, an AAR for arm64-v8a, armeabi-v7a and x86_64 | `android/`; the AAR and a Maven repository of it are assets of every release |
 
 `packaging/consumer/main.c` is the program each of them builds.
 
@@ -35,8 +35,9 @@ will do has been done before. Two things are still by hand afterwards:
   source archive (vcpkg prints it), and `vcpkg.json`'s version;
 - `packaging/meson/bdf.wrap`: its `revision`.
 
-A tag also uploads the Android library to Maven Central, when the
-repository has the secrets for it (android/README.md lists them): it
-waits there to be published by hand. Neither a registry of vcpkg,
+A tag also publishes the Android library on Maven Central, when the
+environment `release` of the repository has the secrets for it
+(android/README.md lists them); dispatched by hand, the workflow has the
+Portal validate it and drops it. Neither a registry of vcpkg,
 ConanCenter, the WrapDB nor nuget.org has libbdf yet: these files are
 what would be sent there.

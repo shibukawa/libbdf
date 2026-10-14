@@ -82,7 +82,7 @@ for p in classes.jar AndroidManifest.xml jni/arm64-v8a/libbdf_jni.so jni/armeabi
 done
 list=$(unzip -Z1 "$dir/android/libbdf-android-$version-maven.zip")
 for p in "libbdf-$version.aar" "libbdf-$version.pom" "libbdf-$version-sources.jar"; do
-  has "the Maven repository" "$list" "io/github/shibukawa/libbdf/$version/$p"
+  has "the Maven repository" "$list" "io/github/shibukawa/libbdf/libbdf/$version/$p"
 done
 [ $bad = 0 ] || exit 1
 

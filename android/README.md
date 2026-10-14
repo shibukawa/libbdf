@@ -4,7 +4,7 @@ BDF documents in Android apps, from Kotlin or Java: libbdf built for each ABI wi
 
 | Directory | What |
 |---|---|
-| `libbdf/` | the library: `io.github.shibukawa:libbdf`, an AAR with `libbdf_jni.so` for arm64-v8a, armeabi-v7a and x86_64 (minimum API 24, pages of 16 KB) |
+| `libbdf/` | the library: `io.github.shibukawa.libbdf:libbdf`, an AAR with `libbdf_jni.so` for arm64-v8a, armeabi-v7a and x86_64 (minimum API 24, pages of 16 KB) |
 | `sample/` | a viewer: a bundled document, any the user opens, a password dialog for encrypted ones, pinch to zoom, drag to move, swipe to turn pages |
 
 ## Using it
@@ -23,7 +23,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("io.github.shibukawa:libbdf:0.8.0")
+    implementation("io.github.shibukawa.libbdf:libbdf:0.8.0")
 }
 ```
 
@@ -69,15 +69,15 @@ The tests open, unlock, search and draw the documents of `libbdf/src/androidTest
 
 ## Maven Central
 
-A tag `v<version>` uploads the library to Maven Central (the job `maven-central` of `.github/workflows/release.yml`): the release build is signed, bundled and sent to the Central Portal, where the deployment waits, validated, for its Publish button. What it needs, as secrets of the repository:
+A tag `v<version>` publishes the library on Maven Central (the job `maven-central` of `.github/workflows/release.yml`, made as pgmem's is): the release build is signed, bundled, uploaded to the Central Portal and published once the Portal has validated it. A version already on Maven Central is left as it is. Dispatched by hand, the workflow has the Portal validate the bundle (namespace, POM, signatures) and then drops it: a rehearsal before a tag. What it needs, as secrets of the environment `release` of the repository (the same as pgmem's):
 
 | Secret | What |
 |---|---|
-| `CENTRAL_USERNAME`, `CENTRAL_PASSWORD` | a user token of central.sonatype.com (Account, Generate User Token) |
-| `MAVEN_SIGNING_KEY` | the private key that signs, ASCII-armoured (`gpg --armor --export-secret-keys <id>`); its public key on a key server Central reads (keys.openpgp.org, keyserver.ubuntu.com) |
-| `MAVEN_SIGNING_PASSWORD` | its passphrase |
+| `CENTRAL_USERNAME`, `CENTRAL_PASSWORD` | a user token of central.sonatype.com |
+| `GPG_PRIVATE_KEY` | the private key that signs, ASCII-armoured; its public key on a key server Central reads |
+| `GPG_PASSPHRASE` | its passphrase |
 
-Without them the job says so and uploads nothing. The group, `io.github.shibukawa`, is set in `libbdf/build.gradle.kts`: it has to be a namespace verified for the account of the token.
+Without them the job says so and uploads nothing. The group, `io.github.shibukawa.libbdf`, is in the namespace `io.github.shibukawa`, as `io.github.shibukawa.pgmem` is; it is set in `libbdf/build.gradle.kts`.
 
 By hand, the same:
 
@@ -86,7 +86,5 @@ cd android
 ORG_GRADLE_PROJECT_signingKey="$(gpg --armor --export-secret-keys <id>)" ORG_GRADLE_PROJECT_signingPassword=... \
   ./gradlew :libbdf:publishReleasePublicationToBuildRepository
 ../packaging/maven-central.sh bundle libbdf/build/repo bundle.zip
-CENTRAL_USERNAME=... CENTRAL_PASSWORD=... ../packaging/maven-central.sh upload bundle.zip
+CENTRAL_USERNAME=... CENTRAL_PASSWORD=... ../packaging/maven-central.sh upload --validate-only bundle.zip   # or without --validate-only to publish
 ```
-
-`CENTRAL_PUBLISHING=AUTOMATIC` publishes without waiting for the button.

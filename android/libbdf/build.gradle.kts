@@ -65,12 +65,13 @@ dependencies {
 // `./gradlew :libbdf:publishReleasePublicationToBuildRepository` writes the
 // AAR, its sources, its documentation and its POM as a Maven repository
 // under build/repo: what a release attaches, and with signatures what goes
-// to Maven Central (packaging/maven-central.sh). The group is the namespace
-// of the publisher on Maven Central.
+// to Maven Central (packaging/maven-central.sh). The group is in the
+// namespace io.github.shibukawa of the publisher on Maven Central, as
+// io.github.shibukawa.pgmem is.
 publishing {
     publications {
         register<MavenPublication>("release") {
-            groupId = "io.github.shibukawa"
+            groupId = "io.github.shibukawa.libbdf"
             artifactId = "libbdf"
             version = bdfVersion
             afterEvaluate {
@@ -111,8 +112,8 @@ publishing {
 
 // Signatures, which Maven Central asks for: with a key in the Gradle
 // properties signingKey (ASCII-armoured) and signingPassword, as the release
-// workflow gives them from its secrets (ORG_GRADLE_PROJECT_signingKey,
-// ORG_GRADLE_PROJECT_signingPassword), every file of the publication gets
+// workflow gives them from its secrets GPG_PRIVATE_KEY and GPG_PASSPHRASE
+// (ORG_GRADLE_PROJECT_signingKey, ORG_GRADLE_PROJECT_signingPassword), every file of the publication gets
 // its .asc. Without a key (or with an empty one) nothing is signed.
 signing {
     val key = providers.gradleProperty("signingKey").orNull?.takeIf { it.isNotBlank() }
