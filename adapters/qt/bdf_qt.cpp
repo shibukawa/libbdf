@@ -423,11 +423,12 @@ void begin_layer_device(bdf_qt *bq, QRect device, double alpha, QPainter::Compos
   bq->layers.push_back(std::move(layer));
 }
 
-void begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+void begin_layer(void *ctx, const double bounds[4], const bdf_canvas_style *style) {
   guarded(ctx, [&](bdf_qt *bq) {
     const QRectF device =
         bq->cur->deviceTransform().mapRect(QRectF(bounds[0], bounds[1], bounds[2], bounds[3]));
-    begin_layer_device(bq, device.toAlignedRect(), double(alpha), mode_of(blend));
+    // (the shadow is not drawn: QPainter has none)
+    begin_layer_device(bq, device.toAlignedRect(), double(style->alpha), mode_of(style->blend));
   });
 }
 

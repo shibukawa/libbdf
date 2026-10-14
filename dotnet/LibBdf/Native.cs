@@ -175,7 +175,7 @@ public static unsafe class Native
         public delegate* unmanaged[Cdecl]<IntPtr, CanvasPath*, byte, CanvasStyle*, void> Fill;
         public delegate* unmanaged[Cdecl]<IntPtr, CanvasPath*, CanvasLine*, CanvasStyle*, void> Stroke;
         public delegate* unmanaged[Cdecl]<IntPtr, CanvasBitmap*, double*, double*, CanvasStyle*, void> Image;
-        public delegate* unmanaged[Cdecl]<IntPtr, double*, float, byte, void> BeginLayer;
+        public delegate* unmanaged[Cdecl]<IntPtr, double*, CanvasStyle*, void> BeginLayer;
         public delegate* unmanaged[Cdecl]<IntPtr, void> EndLayer;
         public IntPtr Text;
     }

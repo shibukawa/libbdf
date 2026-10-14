@@ -1218,10 +1218,12 @@ typedef struct bdf_canvas {
                 const bdf_canvas_style *style);
 
   /* What is drawn until end_layer is drawn on a transparent canvas of its
-   * own and then composited as one with an alpha and a blend mode. bounds
-   * (x, y, w, h in user space) holds all of it. begin_layer saves the
-   * state as save does, and end_layer restores it. */
-  void (*begin_layer)(void *ctx, const double bounds[4], float alpha, uint8_t blend);
+   * own and then composited as one: of the style, the alpha, the blend and
+   * the shadow apply (a group drawn under a shadow casts it as a whole, as
+   * a canvas does). bounds (x, y, w, h in user space) holds all of what is
+   * drawn; the shadow may fall outside them. begin_layer saves the state as
+   * save does, and end_layer restores it. */
+  void (*begin_layer)(void *ctx, const double bounds[4], const bdf_canvas_style *style);
   void (*end_layer)(void *ctx);
 
   /* Optional (NULL: libbdf draws the outlines of the glyphs through fill

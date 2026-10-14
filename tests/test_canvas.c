@@ -190,11 +190,15 @@ static void rec_image(void *ctx, const bdf_canvas_bitmap *bitmap, const double s
   rec_f(ctx, "%s\n", style->smoothing ? " smooth" : "");
 }
 
-static void rec_begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+static void rec_begin_layer(void *ctx, const double bounds[4], const bdf_canvas_style *s) {
   rec *r = ctx;
   r->depth++;
-  rec_f(r, "begin_layer %g,%g,%g,%g alpha=%g blend=%d\n", bounds[0], bounds[1], bounds[2],
-        bounds[3], (double)alpha, blend);
+  rec_f(r, "begin_layer %g,%g,%g,%g alpha=%g blend=%d", bounds[0], bounds[1], bounds[2],
+        bounds[3], (double)s->alpha, s->blend);
+  if ((s->shadow_color & 0xff) != 0 && (s->shadow_blur != 0 || s->shadow_dx != 0 || s->shadow_dy != 0)) {
+    rec_f(r, " shadow=%08x,%g,%g,%g", s->shadow_color, s->shadow_blur, s->shadow_dx, s->shadow_dy);
+  }
+  rec_f(r, "\n");
 }
 
 static void rec_end_layer(void *ctx) {
@@ -398,6 +402,10 @@ static void test_shapes(void) {
   ob_use_at(&b, ob_child(&b, 30), 3, 4);
   /* the styles are as they were before the object was drawn */
   ob_rect(&b, BDF_OP_FILL_RECT, 0, 6, 1, 1);
+  /* a group under the shadow casts it as a whole: what is in it has none */
+  ob_group_begin(&b, 0.5f, BDF_BLEND_SOURCE_OVER, 2, 6, 2, 2);
+  ob_rect(&b, BDF_OP_FILL_RECT, 2, 6, 2, 2);
+  ob_op(&b, BDF_OP_GROUP_END);
   docb_object(&d, 21, &b);
   ob child = {0};
   ob_fill_color(&child, 0x0000ffff);
@@ -437,6 +445,10 @@ static void test_shapes(void) {
                "fill M0,0 L1,0 L1,1 L0,1 Z with 0000ffff shadow=00000080,2,1,-1\n"
                "restore\n"
                "fill M0,6 L1,6 L1,7 L0,7 Z with gradient0(0,0,8,0 0:ff0000ff 1:0000ff80) shadow=00000080,2,1,-1\n"
+               "begin_layer 2,6,2,2 alpha=0.5 blend=0 shadow=00000080,2,1,-1\n"
+               "clip M2,6 L4,6 L4,8 L2,8 Z\n"
+               "fill M2,6 L4,6 L4,8 L2,8 Z with gradient0(0,0,8,0 0:ff0000ff 1:0000ff80)\n"
+               "end_layer\n"
                "restore\n"
                "restore\n"));
   CHECK(bdf_renderer_warning_count(rn) == 0);

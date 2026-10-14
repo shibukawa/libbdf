@@ -479,9 +479,10 @@ static void bdf_cairo_image_fn(void *ctx, const bdf_canvas_bitmap *bitmap, const
   cairo_surface_destroy(whole);
 }
 
-static void bdf_cairo_begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+static void bdf_cairo_begin_layer(void *ctx, const double bounds[4],
+                                  const bdf_canvas_style *style) {
   bdf_cairo *bc = ctx;
-  (void)bounds;
+  (void)bounds; /* (and the shadow: cairo has none) */
   if (bc->nlayers == bc->cap_layers) {
     size_t cap = bc->cap_layers ? 2 * bc->cap_layers : 8;
     bdf_cairo_layer *layers = realloc(bc->layers, cap * sizeof *layers);
@@ -493,8 +494,8 @@ static void bdf_cairo_begin_layer(void *ctx, const double bounds[4], float alpha
     bc->layers = layers;
     bc->cap_layers = cap;
   }
-  bc->layers[bc->nlayers].alpha = alpha;
-  bc->layers[bc->nlayers].op = bdf_cairo_operator(blend);
+  bc->layers[bc->nlayers].alpha = style->alpha;
+  bc->layers[bc->nlayers].op = bdf_cairo_operator(style->blend);
   bc->nlayers++;
   cairo_save(bc->cr);
   cairo_push_group(bc->cr);

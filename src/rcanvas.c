@@ -533,7 +533,7 @@ static void bdfi_player_text(bdfi_player *p, const char *s, size_t len, double x
         }
         const double bounds[4] = {box[0] - user_bold, box[1] - user_bold,
                                   box[2] - box[0] + 2 * user_bold, box[3] - box[1] + 2 * user_bold};
-        p->c->begin_layer(p->c->ctx, bounds, style.alpha, style.blend);
+        p->c->begin_layer(p->c->ctx, bounds, &style);
         solid.alpha = 1;
         solid.blend = BDF_BLEND_SOURCE_OVER;
         solid.shadow_color = 0;
@@ -615,8 +615,18 @@ static void bdfi_player_group_begin(bdfi_player *p, float alpha, uint8_t blend, 
   if (blend > BDF_BLEND_LIGHTER) {
     blend = BDF_BLEND_SOURCE_OVER;
   }
+  /* composited with its alpha and blend, under the shadow of the state it
+   * is drawn in: that of the group as a whole, as the rasterizer has it */
+  bdf_canvas_style style;
+  memset(&style, 0, sizeof style);
+  style.alpha = alpha;
+  style.blend = blend;
+  style.shadow_color = p->st.shadow;
+  style.shadow_blur = p->st.shadow_blur;
+  style.shadow_dx = p->st.shadow_dx;
+  style.shadow_dy = p->st.shadow_dy;
   const double bounds[4] = {x, y, w, h};
-  p->c->begin_layer(p->c->ctx, bounds, alpha, blend);
+  p->c->begin_layer(p->c->ctx, bounds, &style);
   /* nothing of a group shows outside its rectangle */
   bdfi_player_path_reset(p);
   bdfi_player_rect(p, x, y, w, h);

@@ -268,26 +268,34 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             var c = ColorOf(style->Color);
             paint.ColorF = new SKColorF(c.Red / 255f, c.Green / 255f, c.Blue / 255f, c.Alpha / 255f * style->Alpha);
         }
-        if ((style->ShadowColor & 0xff) != 0 && (style->ShadowBlur > 0 || style->ShadowDx != 0 || style->ShadowDy != 0))
-        {
-            // A shadow is in the units of the page whatever the transform is,
-            // and an image filter in those of what is drawn: the offset taken
-            // back through the transform since the page began, the blur by
-            // its scale.
-            if (_base.TryInvert(out var inverse))
-            {
-                var local = SKMatrix.Concat(inverse, _canvas!.TotalMatrix);
-                if (local.TryInvert(out var back))
-                {
-                    var offset = back.MapVector((float)style->ShadowDx, (float)style->ShadowDy);
-                    double det = Math.Abs((double)local.ScaleX * local.ScaleY - (double)local.SkewX * local.SkewY);
-                    float sigma = (float)(style->ShadowBlur / 2 / (det > 0 ? Math.Sqrt(det) : 1));
-                    paint.ImageFilter = SKImageFilter.CreateDropShadow(offset.X, offset.Y, sigma, sigma,
-                        ColorOf(style->ShadowColor));
-                }
-            }
-        }
+        paint.ImageFilter = ShadowOf(style);
         return paint;
+    }
+
+    /// <summary>The shadow of a style as an image filter, or null.</summary>
+    private SKImageFilter? ShadowOf(Native.CanvasStyle* style)
+    {
+        if ((style->ShadowColor & 0xff) == 0 || (style->ShadowBlur <= 0 && style->ShadowDx == 0 && style->ShadowDy == 0))
+        {
+            return null;
+        }
+        // A shadow is in the units of the page whatever the transform is,
+        // and an image filter in those of what is drawn: the offset taken
+        // back through the transform since the page began, the blur by its
+        // scale.
+        if (!_base.TryInvert(out var inverse))
+        {
+            return null;
+        }
+        var local = SKMatrix.Concat(inverse, _canvas!.TotalMatrix);
+        if (!local.TryInvert(out var back))
+        {
+            return null;
+        }
+        var offset = back.MapVector((float)style->ShadowDx, (float)style->ShadowDy);
+        double det = Math.Abs((double)local.ScaleX * local.ScaleY - (double)local.SkewX * local.SkewY);
+        float sigma = (float)(style->ShadowBlur / 2 / (det > 0 ? Math.Sqrt(det) : 1));
+        return SKImageFilter.CreateDropShadow(offset.X, offset.Y, sigma, sigma, ColorOf(style->ShadowColor));
     }
 
     /// <summary>Clips to the band, or the cell, a pattern that does not repeat along both axes shows in.</summary>
@@ -522,7 +530,7 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnBeginLayer(IntPtr ctx, double* bounds, float alpha, byte blend)
+    private static void OnBeginLayer(IntPtr ctx, double* bounds, Native.CanvasStyle* style)
     {
         if (Self(ctx) is not { } self)
         {
@@ -530,7 +538,9 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         }
         try
         {
-            using var whole = new SKPaint { BlendMode = ModeOf(blend), ColorF = new SKColorF(0, 0, 0, alpha) };
+            // the layer is composited with the alpha, the blend and the shadow of the style
+            using var whole = new SKPaint { BlendMode = ModeOf(style->Blend), ColorF = new SKColorF(0, 0, 0, style->Alpha) };
+            whole.ImageFilter = self.ShadowOf(style);
             self._canvas!.SaveLayer(
                 new SKRect((float)bounds[0], (float)bounds[1], (float)(bounds[0] + bounds[2]), (float)(bounds[1] + bounds[3])),
                 whole);

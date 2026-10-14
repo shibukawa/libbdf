@@ -203,21 +203,8 @@ sk_sp<SkShader> shader_of(bdf_skia *bs, const bdf_canvas_paint *paint) {
   return nullptr;
 }
 
-/* The paint of a style: its colour or shader, its alpha, and its shadow.
- * false for a style that paints nothing. */
-bool paint_of(bdf_skia *bs, const bdf_canvas_style *style, SkPaint *out) {
-  out->setAntiAlias(true);
-  if (style->paint) {
-    sk_sp<SkShader> shader = shader_of(bs, style->paint);
-    if (!shader) {
-      return false;
-    }
-    out->setShader(std::move(shader));
-    out->setAlphaf(style->alpha);
-  } else {
-    out->setColor(color_of(style->color));
-    out->setAlphaf(out->getAlphaf() * style->alpha);
-  }
+/* The shadow of a style, as the image filter of a paint. */
+void shadow_of(bdf_skia *bs, const bdf_canvas_style *style, SkPaint *out) {
   if ((style->shadow_color & 0xff) != 0 &&
       (style->shadow_blur > 0 || style->shadow_dx != 0 || style->shadow_dy != 0)) {
     /* A shadow is in the units of the page whatever the transform is, and
@@ -238,6 +225,24 @@ bool paint_of(bdf_skia *bs, const bdf_canvas_style *style, SkPaint *out) {
       }
     }
   }
+}
+
+/* The paint of a style: its colour or shader, its alpha, and its shadow.
+ * false for a style that paints nothing. */
+bool paint_of(bdf_skia *bs, const bdf_canvas_style *style, SkPaint *out) {
+  out->setAntiAlias(true);
+  if (style->paint) {
+    sk_sp<SkShader> shader = shader_of(bs, style->paint);
+    if (!shader) {
+      return false;
+    }
+    out->setShader(std::move(shader));
+    out->setAlphaf(style->alpha);
+  } else {
+    out->setColor(color_of(style->color));
+    out->setAlphaf(out->getAlphaf() * style->alpha);
+  }
+  shadow_of(bs, style, out);
   return true;
 }
 
@@ -384,11 +389,12 @@ void image(void *ctx, const bdf_canvas_bitmap *bitmap, const double src[4], cons
   });
 }
 
-void begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+void begin_layer(void *ctx, const double bounds[4], const bdf_canvas_style *style) {
   guarded(ctx, [&](bdf_skia *bs) {
     SkPaint whole;
-    whole.setAlphaf(alpha);
-    whole.setBlendMode(mode_of(blend));
+    whole.setAlphaf(style->alpha);
+    whole.setBlendMode(mode_of(style->blend));
+    shadow_of(bs, style, &whole); // the layer casts the shadow as a whole
     const SkRect r = SkRect::MakeXYWH(SkScalar(bounds[0]), SkScalar(bounds[1]),
                                       SkScalar(bounds[2]), SkScalar(bounds[3]));
     bs->canvas->saveLayer(&r, &whole);
