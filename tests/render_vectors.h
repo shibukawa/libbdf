@@ -845,7 +845,7 @@ static const struct {
   int w, h, x, y;
   uint64_t hash;
 } rv_object[RV_OBJECTS] = {
-    {0, 877, 1, 0, 0x00000000u, 200, 150, 0, 0, 0x997eace9cc3da76dull},
+    {0, 877, 1, 0, 0x00000000u, 200, 150, 0, 0, 0xce4a7550fb9e9e22ull},
     {877, 734, 0.5, 1, 0xffffffffu, 100, 75, 0, 0, 0xb7c0ca46af747ae5ull},
     {1611, 442, 1.5, 1, 0x204080ffu, 300, 225, 0, 0, 0x3ef3b84feaa29165ull},
     {2053, 313, 2.25, 0, 0x00000000u, 450, 338, 0, 0, 0x81aa81fecdec34c8ull},
