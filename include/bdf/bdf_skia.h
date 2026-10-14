@@ -37,7 +37,12 @@ void bdf_skia_free(bdf_skia *bs);
  * are. The canvas is left as it was. */
 bdf_status bdf_skia_draw_page(bdf_skia *bs, size_t view, size_t page, SkCanvas *canvas,
                               bdf_error *err);
-/* Draws an object part (bdf_play_part): a tile of a sheet. */
+/* Draws a rectangle (x, y, w, h in units) of a view (bdf_play_region): of a
+ * page, of the strips of a scroll view, or of a sheet with its gridlines,
+ * with its corner at the origin of the canvas's coordinates. */
+bdf_status bdf_skia_draw_region(bdf_skia *bs, size_t view, size_t page, const float region[4],
+                                SkCanvas *canvas, bdf_error *err);
+/* Draws an object part (bdf_play_part) in its own coordinates. */
 bdf_status bdf_skia_draw_part(bdf_skia *bs, const uint8_t hash[16], SkCanvas *canvas,
                               bdf_error *err);
 

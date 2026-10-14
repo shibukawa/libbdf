@@ -1,8 +1,10 @@
 // Tests of libbdf for .NET on samples/two-pages.bdf: two pages of 100 by 80;
 // on the first a red rectangle from (10, 10) to (40, 30) and a blue one at
 // half its alpha from (30, 20) to (60, 50); on the second a green circle
-// around (50, 40). The native library is found as the system finds
-// libraries (LD_LIBRARY_PATH in the CI).
+// around (50, 40). And on samples/sheet.bdf: a sheet of 5 columns of 60 by
+// 8 rows of 20 with gridlines, a grey header row and a bar a row from x = 64.
+// The native library is found as the system finds libraries
+// (LD_LIBRARY_PATH in the CI).
 using LibBdf;
 using LibBdf.Skia;
 using SkiaSharp;
@@ -10,7 +12,8 @@ using Xunit;
 
 public class BdfTests
 {
-    private static BdfDocument Sample() => BdfDocument.Open(Path.Combine(AppContext.BaseDirectory, "two-pages.bdf"));
+    private static BdfDocument Sample(string name = "two-pages.bdf") =>
+        BdfDocument.Open(Path.Combine(AppContext.BaseDirectory, name));
 
     // The colour of a pixel of premultiplied RGBA, as 0xRRGGBBAA.
     private static uint At(byte[] pixels, int width, int x, int y)
@@ -34,6 +37,7 @@ public class BdfTests
         Assert.Equal((100f, 80f), doc.PageSize(0));
         Assert.Null(doc.PageSize(2));
         Assert.Null(doc.PageSize(0, view: 1));
+        Assert.Null(doc.SheetSize(0));
     }
 
     [Fact]
@@ -130,5 +134,54 @@ public class BdfTests
             sum += Math.Abs(pixels[i] - soft.Pixels[i]);
         }
         Assert.True(sum / (double)pixels.Length < 1, $"the mean difference is {sum / (double)pixels.Length}");
+    }
+
+    // Draws a region of a view with SkiaSharp at scale on white.
+    private static byte[] DrawRegion(BdfSkiaRenderer skia, SKRect region, int width, int height, float scale)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.White);
+            canvas.Scale(scale);
+            skia.DrawRegion(canvas, region);
+            Assert.Equal(scale, canvas.TotalMatrix.ScaleX);
+        }
+        return bitmap.Bytes;
+    }
+
+    [Fact]
+    public void Regions()
+    {
+        using var doc = Sample();
+        using var renderer = new BdfRenderer(doc);
+        using var skia = new BdfSkiaRenderer(renderer);
+        // from (20, 15) of the first page, 30 by 20 at twice the size, on a canvas larger than that
+        byte[] pixels = DrawRegion(skia, SKRect.Create(20, 15, 30, 20), 100, 60, 2);
+        Assert.Equal(0xff0000ffu, At(pixels, 100, 10, 10)); // (25, 20): red
+        Assert.InRange((int)(At(pixels, 100, 50, 30) >> 24), 0x7d, 0x81); // (45, 30): blue at half its alpha
+        Assert.Equal(0xffffffffu, At(pixels, 100, 70, 20)); // (55, 25) is blue, but out of the region
+        Assert.Throws<BdfException>(() => DrawRegion(skia, SKRect.Create(0, 0, 0, 10), 10, 10, 1));
+    }
+
+    [Fact]
+    public void Sheets()
+    {
+        using var doc = Sample("sheet.bdf");
+        var view = Assert.Single(doc.Views);
+        Assert.Equal(BdfViewKind.Sheet, view.Kind);
+        Assert.Equal(0, view.PageCount);
+        Assert.Equal((300.0, 160.0), doc.SheetSize(0));
+        Assert.Null(doc.PageSize(0));
+        using var renderer = new BdfRenderer(doc);
+        Assert.Throws<BdfException>(() => renderer.Render(0)); // a sheet has no pages
+        using var skia = new BdfSkiaRenderer(renderer);
+        byte[] pixels = DrawRegion(skia, SKRect.Create(0, 0, 300, 160), 300, 160, 1);
+        Assert.Equal(0xe8e8e8ffu, At(pixels, 300, 10, 10)); // the header row
+        Assert.Equal(0xd9d9d9ffu, At(pixels, 300, 10, 20)); // the gridline under it
+        Assert.Equal(0xd9d9d9ffu, At(pixels, 300, 60, 30)); // the one after the first column
+        Assert.Equal(0xffffffffu, At(pixels, 300, 30, 30));
+        Assert.Equal(0x4472c4ffu, At(pixels, 300, 70, 30)); // the first bar
+        Assert.Empty(renderer.Warnings);
     }
 }

@@ -4,8 +4,8 @@
 
 #include "../tools/compare.h"
 
-static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx, double sy, int w,
-                int h, uint8_t *pixels) {
+static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, const float *region,
+                double sx, double sy, int w, int h, uint8_t *pixels) {
   (void)ctx;
   bdf_cairo *bc = bdf_cairo_new(r);
   cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
@@ -14,7 +14,8 @@ static int draw(void *ctx, bdf_renderer *r, size_t view, size_t page, double sx,
   cairo_paint(cr);
   cairo_scale(cr, sx, sy);
   bdf_error err;
-  int ok = bdf_cairo_draw_page(bc, view, page, cr, &err) == BDF_OK;
+  int ok = (region ? bdf_cairo_draw_region(bc, view, page, region, cr, &err)
+                   : bdf_cairo_draw_page(bc, view, page, cr, &err)) == BDF_OK;
   cairo_destroy(cr);
   bdf_cairo_free(bc);
   cairo_surface_flush(s);

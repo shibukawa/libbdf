@@ -46,6 +46,32 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         {
             throw new ArgumentOutOfRangeException(nameof(page));
         }
+        Play(canvas, "a page", (functions, scale, error) =>
+            Native.bdf_play_page(_renderer.Handle, (nuint)view, (nuint)page, scale, functions, error));
+    }
+
+    /// <summary>
+    /// Draws a rectangle of a view, in its units: of a page, of the strips of a scroll view stacked, or of a
+    /// sheet with its gridlines (page is ignored in the last two). The corner of the rectangle is at the origin
+    /// of the canvas, and nothing is drawn outside it. The canvas is left as it was.
+    /// </summary>
+    public void DrawRegion(SKCanvas canvas, SKRect region, int view = 0, int page = 0)
+    {
+        if (page < 0 || view < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(view));
+        }
+        Play(canvas, "a region", (functions, scale, error) =>
+        {
+            float* rect = stackalloc float[4] { region.Left, region.Top, region.Width, region.Height };
+            return Native.bdf_play_region(_renderer.Handle, (nuint)view, (nuint)page, rect, scale, functions, error);
+        });
+    }
+
+    private delegate int Player(Native.Canvas* functions, double scale, Native.Error* error);
+
+    private void Play(SKCanvas canvas, string what, Player play)
+    {
         var self = GCHandle.Alloc(this);
         int depth = canvas.Save();
         try
@@ -69,11 +95,10 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             // the pixels a unit of the canvas is, for what libbdf draws itself
             double det = Math.Abs((double)_base.ScaleX * _base.ScaleY - (double)_base.SkewX * _base.SkewY);
             Native.Error error;
-            int status = Native.bdf_play_page(_renderer.Handle, (nuint)view, (nuint)page, det > 0 ? Math.Sqrt(det) : 1,
-                &functions, &error);
+            int status = play(&functions, det > 0 ? Math.Sqrt(det) : 1, &error);
             if (_failure != null)
             {
-                throw new InvalidOperationException("a page could not be drawn with SkiaSharp", _failure);
+                throw new InvalidOperationException($"{what} could not be drawn with SkiaSharp", _failure);
             }
             BdfException.Check(status, error);
         }
@@ -191,8 +216,11 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             // cell (the caller clips to it), with its edge up to the edge
             bool rx = paint->Repeat is Native.Repeat or Native.RepeatX;
             bool ry = paint->Repeat is Native.Repeat or Native.RepeatY;
+            // a pattern is interpolated between its pixels whatever the
+            // smoothing of images is, as the rasterizer draws it
             var shader = image.ToShader(rx ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp,
-                ry ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp, MatrixOf(paint->Matrix));
+                ry ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear),
+                MatrixOf(paint->Matrix));
             if (owned)
             {
                 image.Dispose();
@@ -253,14 +281,11 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
                 return null;
             }
             paint.Shader = shader;
-            // a pattern is interpolated between its pixels whatever the
-            // smoothing of images is, as the rasterizer draws it
-            paint.FilterQuality = SKFilterQuality.Low;
             paint.ColorF = new SKColorF(1, 1, 1, style->Alpha);
         }
         else if (image)
         {
-            paint.FilterQuality = style->Smoothing != 0 ? SKFilterQuality.Low : SKFilterQuality.None;
+            // (how its pixels are sampled is given where it is drawn)
             paint.ColorF = new SKColorF(0, 0, 0, style->Alpha);
         }
         else
@@ -268,26 +293,34 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             var c = ColorOf(style->Color);
             paint.ColorF = new SKColorF(c.Red / 255f, c.Green / 255f, c.Blue / 255f, c.Alpha / 255f * style->Alpha);
         }
-        if ((style->ShadowColor & 0xff) != 0 && (style->ShadowBlur > 0 || style->ShadowDx != 0 || style->ShadowDy != 0))
-        {
-            // A shadow is in the units of the page whatever the transform is,
-            // and an image filter in those of what is drawn: the offset taken
-            // back through the transform since the page began, the blur by
-            // its scale.
-            if (_base.TryInvert(out var inverse))
-            {
-                var local = SKMatrix.Concat(inverse, _canvas!.TotalMatrix);
-                if (local.TryInvert(out var back))
-                {
-                    var offset = back.MapVector((float)style->ShadowDx, (float)style->ShadowDy);
-                    double det = Math.Abs((double)local.ScaleX * local.ScaleY - (double)local.SkewX * local.SkewY);
-                    float sigma = (float)(style->ShadowBlur / 2 / (det > 0 ? Math.Sqrt(det) : 1));
-                    paint.ImageFilter = SKImageFilter.CreateDropShadow(offset.X, offset.Y, sigma, sigma,
-                        ColorOf(style->ShadowColor));
-                }
-            }
-        }
+        paint.ImageFilter = ShadowOf(style);
         return paint;
+    }
+
+    /// <summary>The shadow of a style as an image filter, or null.</summary>
+    private SKImageFilter? ShadowOf(Native.CanvasStyle* style)
+    {
+        if ((style->ShadowColor & 0xff) == 0 || (style->ShadowBlur <= 0 && style->ShadowDx == 0 && style->ShadowDy == 0))
+        {
+            return null;
+        }
+        // A shadow is in the units of the page whatever the transform is,
+        // and an image filter in those of what is drawn: the offset taken
+        // back through the transform since the page began, the blur by its
+        // scale.
+        if (!_base.TryInvert(out var inverse))
+        {
+            return null;
+        }
+        var local = SKMatrix.Concat(inverse, _canvas!.TotalMatrix);
+        if (!local.TryInvert(out var back))
+        {
+            return null;
+        }
+        var offset = back.MapVector((float)style->ShadowDx, (float)style->ShadowDy);
+        double det = Math.Abs((double)local.ScaleX * local.ScaleY - (double)local.SkewX * local.SkewY);
+        float sigma = (float)(style->ShadowBlur / 2 / (det > 0 ? Math.Sqrt(det) : 1));
+        return SKImageFilter.CreateDropShadow(offset.X, offset.Y, sigma, sigma, ColorOf(style->ShadowColor));
     }
 
     /// <summary>Clips to the band, or the cell, a pattern that does not repeat along both axes shows in.</summary>
@@ -385,7 +418,7 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         try
         {
             var matrix = MatrixOf(m);
-            self._canvas!.Concat(ref matrix);
+            self._canvas!.Concat(in matrix);
         }
         catch (Exception e)
         {
@@ -506,9 +539,12 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             }
             using var paint = self.PaintOf(style, image: true)!;
             paint.BlendMode = ModeOf(style->Blend);
+            // interpolated between its pixels when the style smooths images
+            var sampling = new SKSamplingOptions(style->Smoothing != 0 ? SKFilterMode.Linear : SKFilterMode.Nearest);
             self._canvas!.DrawImage(image,
                 new SKRect((float)src[0], (float)src[1], (float)(src[0] + src[2]), (float)(src[1] + src[3])),
-                new SKRect((float)dst[0], (float)dst[1], (float)(dst[0] + dst[2]), (float)(dst[1] + dst[3])), paint);
+                new SKRect((float)dst[0], (float)dst[1], (float)(dst[0] + dst[2]), (float)(dst[1] + dst[3])),
+                sampling, paint);
             paint.ImageFilter?.Dispose();
             if (owned)
             {
@@ -522,7 +558,7 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void OnBeginLayer(IntPtr ctx, double* bounds, float alpha, byte blend)
+    private static void OnBeginLayer(IntPtr ctx, double* bounds, Native.CanvasStyle* style)
     {
         if (Self(ctx) is not { } self)
         {
@@ -530,7 +566,9 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         }
         try
         {
-            using var whole = new SKPaint { BlendMode = ModeOf(blend), ColorF = new SKColorF(0, 0, 0, alpha) };
+            // the layer is composited with the alpha, the blend and the shadow of the style
+            using var whole = new SKPaint { BlendMode = ModeOf(style->Blend), ColorF = new SKColorF(0, 0, 0, style->Alpha) };
+            whole.ImageFilter = self.ShadowOf(style);
             self._canvas!.SaveLayer(
                 new SKRect((float)bounds[0], (float)bounds[1], (float)(bounds[0] + bounds[2]), (float)(bounds[1] + bounds[3])),
                 whole);

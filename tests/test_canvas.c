@@ -1,5 +1,7 @@
-/* Tests of drawing through a canvas (bdf_play_page, bdf_play_part): a canvas
- * that writes down what it is asked to do, and hand-built pages. */
+/* Tests of drawing through a canvas (bdf_play_page, bdf_play_region,
+ * bdf_play_part): a canvas that writes down what it is asked to do, and
+ * hand-built pages. */
+#include <math.h>
 #include <stdarg.h>
 
 #include "testutil.h"
@@ -190,11 +192,15 @@ static void rec_image(void *ctx, const bdf_canvas_bitmap *bitmap, const double s
   rec_f(ctx, "%s\n", style->smoothing ? " smooth" : "");
 }
 
-static void rec_begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+static void rec_begin_layer(void *ctx, const double bounds[4], const bdf_canvas_style *s) {
   rec *r = ctx;
   r->depth++;
-  rec_f(r, "begin_layer %g,%g,%g,%g alpha=%g blend=%d\n", bounds[0], bounds[1], bounds[2],
-        bounds[3], (double)alpha, blend);
+  rec_f(r, "begin_layer %g,%g,%g,%g alpha=%g blend=%d", bounds[0], bounds[1], bounds[2],
+        bounds[3], (double)s->alpha, s->blend);
+  if ((s->shadow_color & 0xff) != 0 && (s->shadow_blur != 0 || s->shadow_dx != 0 || s->shadow_dy != 0)) {
+    rec_f(r, " shadow=%08x,%g,%g,%g", s->shadow_color, s->shadow_blur, s->shadow_dx, s->shadow_dy);
+  }
+  rec_f(r, "\n");
 }
 
 static void rec_end_layer(void *ctx) {
@@ -398,6 +404,10 @@ static void test_shapes(void) {
   ob_use_at(&b, ob_child(&b, 30), 3, 4);
   /* the styles are as they were before the object was drawn */
   ob_rect(&b, BDF_OP_FILL_RECT, 0, 6, 1, 1);
+  /* a group under the shadow casts it as a whole: what is in it has none */
+  ob_group_begin(&b, 0.5f, BDF_BLEND_SOURCE_OVER, 2, 6, 2, 2);
+  ob_rect(&b, BDF_OP_FILL_RECT, 2, 6, 2, 2);
+  ob_op(&b, BDF_OP_GROUP_END);
   docb_object(&d, 21, &b);
   ob child = {0};
   ob_fill_color(&child, 0x0000ffff);
@@ -437,6 +447,10 @@ static void test_shapes(void) {
                "fill M0,0 L1,0 L1,1 L0,1 Z with 0000ffff shadow=00000080,2,1,-1\n"
                "restore\n"
                "fill M0,6 L1,6 L1,7 L0,7 Z with gradient0(0,0,8,0 0:ff0000ff 1:0000ff80) shadow=00000080,2,1,-1\n"
+               "begin_layer 2,6,2,2 alpha=0.5 blend=0 shadow=00000080,2,1,-1\n"
+               "clip M2,6 L4,6 L4,8 L2,8 Z\n"
+               "fill M2,6 L4,6 L4,8 L2,8 Z with gradient0(0,0,8,0 0:ff0000ff 1:0000ff80)\n"
+               "end_layer\n"
                "restore\n"
                "restore\n"));
   CHECK(bdf_renderer_warning_count(rn) == 0);
@@ -705,8 +719,141 @@ static void test_svg_images(void) {
   free(keep.b);
 }
 
+/* A region of a view: of a page, of the strips of a scroll view stacked, of
+ * a sheet with its gridlines; its corner at the origin of the canvas. */
+static void test_regions(void) {
+  docb d = {0};
+  wr keep;
+  bdf_error err;
+  rec r = {0};
+
+  ob red = {0};
+  ob_fill_color(&red, 0xff0000ff);
+  ob_rect(&red, BDF_OP_FILL_RECT, 1, 1, 2, 2);
+  docb_object(&d, 20, &red);
+  ob blue = {0};
+  ob_fill_color(&blue, 0x0000ffff);
+  ob_rect(&blue, BDF_OP_FILL_RECT, 0, 0, 1, 1);
+  docb_object(&d, 21, &blue);
+  char views[2048], n20[33], n21[33];
+  part_name(20, n20);
+  part_name(21, n21);
+  snprintf(views, sizeof views,
+           "[{\"id\":\"p\",\"kind\":\"fixed\",\"pages\":["
+           "{\"w\":6,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]},"
+           "{\"id\":\"s\",\"kind\":\"sheet\",\"tile\":4,\"cols\":[[3,2]],\"rows\":[[2,3]],\"gridlines\":true,"
+           "\"tiles\":{\"0,1\":\"%s\",\"1,0\":\"%s\"}},"
+           "{\"id\":\"c\",\"kind\":\"scroll\",\"pages\":["
+           "{\"w\":6,\"h\":4,\"body\":{\"x\":1,\"y\":1,\"w\":4,\"h\":2},"
+           "\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"},{\"role\":\"header\",\"obj\":\"%s\"}]},"
+           "{\"w\":6,\"h\":4,\"layers\":[{\"role\":\"body\",\"obj\":\"%s\"}]}]}]",
+           n20, n21, n20, n20, n21, n21);
+  bdf_doc *doc = docb_open(&d, views, &keep);
+  bdf_renderer *rn = NULL;
+  CHECK(bdf_renderer_new(doc, NULL, &rn, &err) == BDF_OK);
+
+  /* of a page: cut to the region and to the page */
+  const float part[4] = {1, 1, 2, 2};
+  bdf_canvas c = rec_canvas(&r, 0);
+  CHECK(bdf_play_region(rn, 0, 0, part, 1, &c, &err) == BDF_OK);
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L2,0 L2,2 L0,2 Z\n"
+               "transform 1 0 0 1 -1 -1\n"
+               "clip M0,0 L6,0 L6,4 L0,4 Z\n"
+               "save\n"
+               "fill M1,1 L3,1 L3,3 L1,3 Z with ff0000ff\n"
+               "restore\n"
+               "restore\n"));
+
+  /* of a sheet: the gridlines after each column and row, as far as the
+   * sheet goes, then the tiles by row */
+  const float cells[4] = {1, 1, 6, 6};
+  c = rec_canvas(&r, 0);
+  CHECK(bdf_play_region(rn, 1, 0, cells, 1, &c, &err) == BDF_OK);
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L6,0 L6,6 L0,6 Z\n"
+               "fill M1,0 L2,0 L2,5 L1,5 Z M3,0 L4,0 L4,5 L3,5 Z M5,0 L6,0 L6,5 L5,5 Z"
+               " M0,2 L5,2 L5,3 L0,3 Z M0,5 L5,5 L5,6 L0,6 Z with d9d9d9ff\n"
+               "save\n"
+               "transform 1 0 0 1 3 -1\n"
+               "clip M0,0 L4,0 L4,4 L0,4 Z\n"
+               "save\n"
+               "fill M1,1 L3,1 L3,3 L1,3 Z with ff0000ff\n"
+               "restore\n"
+               "restore\n"
+               "save\n"
+               "transform 1 0 0 1 -1 3\n"
+               "clip M0,0 L4,0 L4,4 L0,4 Z\n"
+               "save\n"
+               "fill M0,0 L1,0 L1,1 L0,1 Z with 0000ffff\n"
+               "restore\n"
+               "restore\n"
+               "restore\n"));
+  /* a gridline is a device pixel wide, on whole pixels from the corner:
+   * the line after the first column is at 2 - 0.3 = 1.7 units, 3.4 pixels */
+  const float corner[4] = {0.3f, 0, 2, 1};
+  c = rec_canvas(&r, 0);
+  CHECK(bdf_play_region(rn, 1, 0, corner, 2, &c, &err) == BDF_OK);
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L2,0 L2,1 L0,1 Z\n"
+               "fill M1.5,0 L2,0 L2,1 L1.5,1 Z with d9d9d9ff\n"
+               "restore\n"));
+
+  /* of a scroll view: each strip cut to its body, with only the layers of
+   * the body */
+  const float strips[4] = {0, 1, 6, 4};
+  c = rec_canvas(&r, 0);
+  CHECK(bdf_play_region(rn, 2, 7 /* ignored */, strips, 1, &c, &err) == BDF_OK);
+  CHECK(rec_is(&r,
+               "save\n"
+               "clip M0,0 L6,0 L6,4 L0,4 Z\n"
+               "save\n"
+               "transform 1 0 0 1 0 -1\n"
+               "clip M0,0 L4,0 L4,2 L0,2 Z\n"
+               "transform 1 0 0 1 -1 -1\n"
+               "save\n"
+               "fill M1,1 L3,1 L3,3 L1,3 Z with ff0000ff\n"
+               "restore\n"
+               "restore\n"
+               "save\n"
+               "transform 1 0 0 1 0 1\n"
+               "clip M0,0 L6,0 L6,4 L0,4 Z\n"
+               "save\n"
+               "fill M0,0 L1,0 L1,1 L0,1 Z with 0000ffff\n"
+               "restore\n"
+               "restore\n"
+               "restore\n"));
+  CHECK(bdf_renderer_warning_count(rn) == 0);
+
+  /* what cannot be played */
+  c = rec_canvas(&r, 0);
+  CHECK(bdf_play_region(rn, 0, 1, part, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK_MSG(err, "no such page");
+  CHECK(bdf_play_region(rn, 3, 0, part, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK_MSG(err, "no such view");
+  const float none[4] = {0, 0, 0, 4};
+  CHECK(bdf_play_region(rn, 1, 0, none, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK_MSG(err, "empty region");
+  const float nan[4] = {NAN, 0, 2, 2};
+  CHECK(bdf_play_region(rn, 1, 0, nan, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK_MSG(err, "bad region");
+  CHECK(bdf_play_region(rn, 1, 0, NULL, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK(bdf_play_region(NULL, 1, 0, part, 1, &c, &err) == BDF_ERR_ARG);
+  CHECK(bdf_play_region(rn, 1, 0, part, 1, NULL, &err) == BDF_ERR_ARG);
+  CHECK(rec_is(&r, "" /* nothing was asked */));
+
+  free(r.s);
+  bdf_renderer_free(rn);
+  bdf_doc_free(doc);
+  free(keep.b);
+}
+
 int main(void) {
   test_shapes();
+  test_regions();
   test_images_and_layers();
   test_text();
   test_svg_images();

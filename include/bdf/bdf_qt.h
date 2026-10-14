@@ -36,7 +36,12 @@ void bdf_qt_free(bdf_qt *bq);
  * are. The painter is left as it was. */
 bdf_status bdf_qt_draw_page(bdf_qt *bq, size_t view, size_t page, QPainter *painter,
                             bdf_error *err);
-/* Draws an object part (bdf_play_part): a tile of a sheet. */
+/* Draws a rectangle (x, y, w, h in units) of a view (bdf_play_region): of a
+ * page, of the strips of a scroll view, or of a sheet with its gridlines,
+ * with its corner at the origin of the painter's coordinates. */
+bdf_status bdf_qt_draw_region(bdf_qt *bq, size_t view, size_t page, const float region[4],
+                              QPainter *painter, bdf_error *err);
+/* Draws an object part (bdf_play_part) in its own coordinates. */
 bdf_status bdf_qt_draw_part(bdf_qt *bq, const uint8_t hash[16], QPainter *painter, bdf_error *err);
 
 /* The canvas the two draw through, for a caller that plays by itself. It is

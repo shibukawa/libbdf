@@ -786,8 +786,16 @@ static void bdfi_group_begin(bdfi_drawer *d, float alpha, uint8_t blend, double 
   }
   bdfi_irect r = bdfi_irect_of((int)floor(bdfi_clampf(x0)), (int)floor(bdfi_clampf(y0)),
                                (int)ceil(bdfi_clampf(x1)), (int)ceil(bdfi_clampf(y1)));
-  /* nothing outside the parent canvas or its clip can show */
-  r = bdfi_irect_intersect(r, bdfi_draw_bounds(d));
+  /* nothing outside the parent canvas or its clip can show, but for the
+   * shadow of what is as far outside it as the shadow reaches */
+  bdfi_irect on = bdfi_draw_bounds(d);
+  if (bdfi_shadow_active(st)) {
+    /* (the blur is at most BDF_MAX_SHADOW_BLUR, the offsets 1 << 24) */
+    int reach = (int)ceil(3 * st->shadow_blur / 2 +
+                          bdfi_fmax(fabs(st->shadow_dx), fabs(st->shadow_dy)) + 1);
+    on = bdfi_irect_of(on.x0 - reach, on.y0 - reach, on.x1 + reach, on.y1 + reach);
+  }
+  r = bdfi_irect_intersect(r, on);
   if (bdfi_irect_empty(r)) {
     r = bdfi_irect_of(0, 0, 1, 1);
   }
@@ -871,6 +879,15 @@ static void bdfi_group_end(bdfi_drawer *d) {
     blend = BDF_BLEND_SOURCE_OVER;
   }
   bdfi_surface_shader ss = bdfi_surface_shader_of(s, g.x, g.y);
+  /* the shadow of the state around a group is that of the group as a
+   * whole, as a canvas draws it: under it, composited as the group is */
+  bdfi_state *st = &d->ctx->st;
+  if (bdfi_shadow_active(st)) {
+    uint8_t was = st->blend;
+    st->blend = blend;
+    bdfi_draw_shadow(d, &whole, &ss.base, g.alpha);
+    st->blend = was;
+  }
   bdfi_draw_fill(d, &whole, &ss.base, g.alpha, blend, d->ctx->st.clip);
   g.ctx->done = 1;
   bdfi_ctx_unpin(d, g.ctx);

@@ -116,6 +116,19 @@ public sealed unsafe class BdfDocument : IDisposable
         return Native.bdf_doc_page(Handle, (nuint)view, (nuint)page, &p) == Native.Ok ? (p.Width, p.Height) : null;
     }
 
+    /// <summary>The size of a sheet in units, from its rows and columns, or null for a view that is not a sheet.</summary>
+    public (double Width, double Height)? SheetSize(int view)
+    {
+        Native.View v;
+        if (view < 0 || Native.bdf_doc_view(Handle, (nuint)view, &v) != Native.Ok || v.KindCode != (int)BdfViewKind.Sheet)
+        {
+            return null;
+        }
+        double w, h;
+        Native.bdf_sheet_size(Handle, (nuint)view, &w, &h);
+        return (w, h);
+    }
+
     public void Dispose()
     {
         if (_doc != IntPtr.Zero)

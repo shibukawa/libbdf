@@ -8,9 +8,9 @@
 //	go run -C go ./genvectors ../tests [unlock] [crypto] [render] [sample]
 //
 // Without names it writes the three kinds of vectors. sample writes
-// samples/two-pages.bdf beside the tests directory instead: a small document
-// made here, for the tests of the packages (Swift, .NET) and for trying
-// things out. The documents of unlock are sealed with
+// samples/two-pages.bdf and samples/sheet.bdf beside the tests directory
+// instead: small documents made here, for the tests of the packages (Swift,
+// .NET) and for trying things out. The documents of unlock are sealed with
 // fresh random salts and nonces, so its bytes differ from run to run. The
 // pictures of render are those of the reference where it computes without
 // fused multiply-adds, which libbdf draws on every platform: write them with
@@ -612,6 +612,32 @@ func sampleDocument(path string) {
 		h, _ := doc.AddObject(o)
 		view.AddPage(100, 80, bdf.Layer{Role: bdf.RoleBody, Obj: h})
 	}
+	writeDocument(doc, path)
+}
+
+// sheetDocument writes samples/sheet.bdf: a sheet of 5 columns of 60 by 8
+// rows of 20 with its gridlines, in one tile of 512: a grey header row, and
+// bars of a colour a row across the second column on.
+func sheetDocument(path string) {
+	doc := bdf.NewDocument()
+	cells := bdf.NewObject()
+	cells.FillColor(0xe8e8e8ff).FillRect(0, 0, 300, 20)
+	colors := []bdf.Color{0x4472c4ff, 0xed7d31ff, 0xa5a5a5ff, 0xffc000ff, 0x5b9bd5ff, 0x70ad47ff, 0x264478ff}
+	for i, c := range colors {
+		cells.FillColor(c).FillRect(64, float32(20*(i+1)+4), float32(30*(i+1)), 12)
+	}
+	cells.SetBBox(0, 0, 300, 160)
+	h, _ := doc.AddObject(cells)
+	view := doc.NewView("sheet1", bdf.ViewSheet, "Sheet1")
+	view.Tile = 512
+	view.Cols = []bdf.Run{{5, 60}}
+	view.Rows = []bdf.Run{{8, 20}}
+	view.Gridlines = true
+	view.Tiles = map[string]string{"0,0": h.String()}
+	writeDocument(doc, path)
+}
+
+func writeDocument(doc *bdf.Document, path string) {
 	var file bytes.Buffer
 	if err := doc.WriteSingle(&file); err != nil {
 		log.Fatal(err)
@@ -642,6 +668,7 @@ func main() {
 			renderVectors(filepath.Join(os.Args[1], "render_vectors.h"))
 		case "sample":
 			sampleDocument(filepath.Join(os.Args[1], "..", "samples", "two-pages.bdf"))
+			sheetDocument(filepath.Join(os.Args[1], "..", "samples", "sheet.bdf"))
 		default:
 			log.Fatalf("no vectors named %q", name)
 		}

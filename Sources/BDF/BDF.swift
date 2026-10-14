@@ -1,5 +1,5 @@
 // A small Swift layer over libbdf: a document, its views and pages, and its
-// pages drawn into a CGContext or as a CGImage. The whole C API is there as
+// pages (and rectangles of its sheets) drawn into a CGContext or as a CGImage. The whole C API is there as
 // well, in the module CBDF.
 import CBDF
 import CBDFCoreGraphics
@@ -140,6 +140,16 @@ public final class BDFDocument {
         return CGSize(width: CGFloat(p.w), height: CGFloat(p.h))
     }
 
+    /// The size of a sheet in units, from its rows and columns, or nil for a
+    /// view that is not a sheet.
+    public func sheetSize(view: Int) -> CGSize? {
+        var v = bdf_view()
+        guard view >= 0, bdf_doc_view(pointer, view, &v) == BDF_OK, v.kind_code == BDF_VIEW_SHEET else { return nil }
+        var w = 0.0, h = 0.0
+        bdf_sheet_size(pointer, view, &w, &h)
+        return CGSize(width: w, height: h)
+    }
+
     private static func string(_ p: UnsafePointer<CChar>?, _ n: Int) -> String {
         guard let p, n > 0 else { return "" }
         return String(decoding: UnsafeRawBufferPointer(start: p, count: n), as: UTF8.self)
@@ -184,6 +194,18 @@ public final class BDFRenderer {
     public func draw(view: Int = 0, page: Int, in context: CGContext) throws {
         var error = bdf_error()
         let status = bdf_cg_draw_page(adapter, view, page, context, &error)
+        guard status == BDF_OK else { throw BDFError(status, error) }
+    }
+
+    /// Draws a rectangle of a view, in its units, with Core Graphics: of a
+    /// page, of the strips of a scroll view stacked, or of a sheet with its
+    /// gridlines (`page` is ignored in the last two). The corner of the
+    /// rectangle is at the origin of the context, y down as for `draw(view:page:in:)`,
+    /// and nothing is drawn outside it.
+    public func draw(view: Int = 0, page: Int = 0, region: CGRect, in context: CGContext) throws {
+        var error = bdf_error()
+        let rect = [Float(region.minX), Float(region.minY), Float(region.width), Float(region.height)]
+        let status = bdf_cg_draw_region(adapter, view, page, rect, context, &error)
         guard status == BDF_OK else { throw BDFError(status, error) }
     }
 

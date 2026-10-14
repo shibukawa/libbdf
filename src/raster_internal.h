@@ -787,4 +787,38 @@ BDF_INTERNAL void bdfi_draw_top(bdfi_drawer *d, bdfi_robj *o, const uint8_t *has
 BDF_INTERNAL bdfi_mask *bdfi_draw_clip_to(bdfi_drawer *d, const bdfi_mat *m, double x, double y,
                                           double w, double h);
 
+/* Whether a layer has a role. */
+BDF_INTERNAL int bdfi_role_is(const bdf_layer *l, const char *role);
+
+/* ---- Sheets -------------------------------------------------------------- */
+
+/* Limits of the gridlines of a sheet, across and down: a document decides
+ * how many rows and columns a sheet has. */
+#define BDFI_MAX_GRID_STEPS ((int64_t)1 << 24)
+#define BDFI_MAX_GRID_LINES ((int64_t)1 << 16)
+/* The colour of the gridlines (the viewer's). */
+#define BDFI_GRID_COLOR 0xd9d9d9ffu
+
+/* Goes through the rows (rows != 0) or the columns of a sheet from the
+ * first, and calls line with the device pixel (under m, rounded) of the
+ * line after each one that lies in [from, to]. again says that the line
+ * before was at the same pixel; line returns whether drawing it once more
+ * changed a pixel. */
+BDF_INTERNAL void bdfi_grid_walk(struct bdf_renderer *r, size_t view, int rows, size_t nruns,
+                                 double from, double to, const bdfi_mat *m,
+                                 int (*line)(void *ctx, double px, int again), void *ctx);
+
+/* A tile of a sheet that a region overlaps. */
+typedef struct bdfi_sheet_tile {
+  int64_t tx, ty; /* where it is, in tiles */
+  size_t tile;    /* its number in the view */
+} bdfi_sheet_tile;
+
+/* The tiles of a sheet that a region overlaps, in the order they are drawn
+ * (by row, then by column), in *out (to be freed); the result is how many.
+ * *size is the size of a tile in units, or 0 (warned of) when the tiles
+ * are not drawn. */
+BDF_INTERNAL size_t bdfi_sheet_tiles(struct bdf_renderer *r, size_t view, const bdf_view *v,
+                                     const float region[4], double *size, bdfi_sheet_tile **out);
+
 #endif /* BDF_RASTER_INTERNAL_H */

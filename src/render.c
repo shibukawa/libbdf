@@ -632,7 +632,7 @@ static bdf_status bdfi_draw_page(struct bdf_renderer *r, size_t view, size_t pag
   return bdfi_finish(d, out, err);
 }
 
-static int bdfi_role_is(const bdf_layer *l, const char *role) {
+int bdfi_role_is(const bdf_layer *l, const char *role) {
   size_t n = strlen(role);
   return l->role_len == n && memcmp(l->role, role, n) == 0;
 }
@@ -706,18 +706,12 @@ void bdf_sheet_size(const bdf_doc *doc, size_t view, double *w, double *h) {
   }
 }
 
-/* Limits of the gridlines of a sheet, across and down: a document decides
- * how many rows and columns a sheet has. */
-#define BDFI_MAX_GRID_STEPS ((int64_t)1 << 24)
-#define BDFI_MAX_GRID_LINES ((int64_t)1 << 16)
-
 typedef struct bdfi_grid {
   bdfi_drawer *d;
   bdfi_solid color;
   bdfi_mask all;
   float *before;
   size_t cap_before;
-  const bdfi_mat *m;
   int rows;                        /* the lines of the rows, else of the columns */
   double top, bottom, left, right; /* where the lines run from and to */
 } bdfi_grid;
@@ -771,24 +765,23 @@ static int bdfi_grid_line(bdfi_grid *g, double ax, double ay, double bx, double 
   return changed;
 }
 
-static int bdfi_grid_draw(bdfi_grid *g, double px, int again) {
+static int bdfi_grid_draw(void *ctx, double px, int again) {
+  bdfi_grid *g = ctx;
   if (g->rows) {
     return bdfi_grid_line(g, g->left, px, g->right, px + 1, again);
   }
   return bdfi_grid_line(g, px, g->top, px + 1, g->bottom, again);
 }
 
-/* Goes through the rows or the columns from the first, and draws the line
- * after each one that lies in [from, to]. */
-static void bdfi_grid_walk(bdfi_grid *g, const bdf_doc *doc, size_t view, size_t nruns, double from,
-                           double to) {
-  struct bdf_renderer *r = g->d->r;
+void bdfi_grid_walk(struct bdf_renderer *r, size_t view, int rows, size_t nruns, double from,
+                    double to, const bdfi_mat *m, int (*line)(void *ctx, double px, int again),
+                    void *ctx) {
   double pos = 0.0, last = NAN;
   int64_t steps = 0, lines = 0;
   int settled = 0;
   for (size_t ri = 0; ri < nruns && !r->oom; ri++) {
     float run[2];
-    if (bdf_doc_view_run(doc, view, g->rows, ri, run) != BDF_OK) {
+    if (bdf_doc_view_run(r->doc, view, rows, ri, run) != BDF_OK) {
       continue;
     }
     double n = (double)run[0], size = (double)run[1];
@@ -812,8 +805,8 @@ static void bdfi_grid_walk(bdfi_grid *g, const bdf_doc *doc, size_t view, size_t
         }
         continue;
       }
-      bdfi_pt at = g->rows ? bdfi_mat_pt(g->m, 0, pos) : bdfi_mat_pt(g->m, pos, 0);
-      double px = round(g->rows ? at.y : at.x);
+      bdfi_pt at = rows ? bdfi_mat_pt(m, 0, pos) : bdfi_mat_pt(m, pos, 0);
+      double px = round(rows ? at.y : at.x);
       int again = px == last;
       if (again && settled) {
         if (size == 0) {
@@ -827,7 +820,7 @@ static void bdfi_grid_walk(bdfi_grid *g, const bdf_doc *doc, size_t view, size_t
                      (long long)BDFI_MAX_GRID_LINES);
         return;
       }
-      int changed = bdfi_grid_draw(g, px, again);
+      int changed = line(ctx, px, again);
       last = px;
       settled = again && !changed;
     }
@@ -838,35 +831,29 @@ static void bdfi_grid_walk(bdfi_grid *g, const bdf_doc *doc, size_t view, size_t
  * device pixel wide, snapped to pixels, in #d9d9d9. */
 static void bdfi_gridlines(bdfi_drawer *d, size_t view, const bdf_view *v, const float region[4],
                            const bdfi_mat *m) {
-  const bdf_doc *doc = d->r->doc;
+  struct bdf_renderer *r = d->r;
   double sw, sh;
-  bdf_sheet_size(doc, view, &sw, &sh);
+  bdf_sheet_size(r->doc, view, &sw, &sh);
   double x1 = bdfi_fmin((double)(region[0] + region[2]), sw);
   double y1 = bdfi_fmin((double)(region[1] + region[3]), sh);
   bdfi_grid g;
   memset(&g, 0, sizeof g);
   g.d = d;
-  g.color = bdfi_premul(0xd9d9d9ff);
+  g.color = bdfi_premul(BDFI_GRID_COLOR);
   g.all.r = bdfi_surface_bounds(d->top->target);
-  g.m = m;
   g.top = bdfi_mat_pt(m, 0, (double)region[1]).y;
   g.bottom = bdfi_mat_pt(m, 0, y1).y;
   g.rows = 0;
-  bdfi_grid_walk(&g, doc, view, v->ncols, (double)region[0], x1);
+  bdfi_grid_walk(r, view, 0, v->ncols, (double)region[0], x1, m, bdfi_grid_draw, &g);
   g.left = bdfi_mat_pt(m, (double)region[0], 0).x;
   g.right = bdfi_mat_pt(m, x1, 0).x;
   g.rows = 1;
-  bdfi_grid_walk(&g, doc, view, v->nrows, (double)region[1], y1);
+  bdfi_grid_walk(r, view, 1, v->nrows, (double)region[1], y1, m, bdfi_grid_draw, &g);
   free(g.before);
 }
 
-typedef struct bdfi_place {
-  int64_t tx, ty;
-  size_t tile;
-} bdfi_place;
-
-static int bdfi_place_cmp(const void *pa, const void *pb) {
-  const bdfi_place *a = pa, *b = pb;
+static int bdfi_sheet_tile_cmp(const void *pa, const void *pb) {
+  const bdfi_sheet_tile *a = pa, *b = pb;
   if (a->ty != b->ty) {
     return a->ty < b->ty ? -1 : 1;
   }
@@ -897,6 +884,61 @@ static const char *bdfi_place_number(const char *s, const char *end, int64_t *ou
   return p;
 }
 
+size_t bdfi_sheet_tiles(struct bdf_renderer *r, size_t view, const bdf_view *v,
+                        const float region[4], double *size, bdfi_sheet_tile **out) {
+  *out = NULL;
+  double tile = (double)v->tile_stated;
+  if (tile <= 0) {
+    tile = 2048;
+  }
+  if (!(tile >= 1) || bdfi_isinf(tile)) {
+    /* a region would hold any number of them */
+    bdfi_r_warnf(r, "the tiles of a sheet are %g units wide: they are not drawn", tile);
+    *size = 0;
+    return 0;
+  }
+  *size = tile;
+#define INDEX(x) ((int64_t)floor(bdfi_clampf((x) / tile)))
+  int64_t tx0 = INDEX((double)region[0]), ty0 = INDEX((double)region[1]);
+  int64_t tx1 = INDEX((double)(region[0] + region[2]) - 1e-6);
+  int64_t ty1 = INDEX((double)(region[1] + region[3]) - 1e-6);
+#undef INDEX
+  if (!v->ntiles) {
+    return 0;
+  }
+  bdfi_sheet_tile *places = bdfi_malloc_array(v->ntiles, sizeof *places);
+  if (!places) {
+    r->oom = 1;
+    return 0;
+  }
+  size_t n = 0;
+  for (size_t i = 0; i < v->ntiles; i++) {
+    bdf_tile t;
+    int64_t tx, ty;
+    if (bdf_doc_tile(r->doc, view, i, &t) != BDF_OK) {
+      continue;
+    }
+    const char *end = t.key + t.key_len;
+    const char *p = bdfi_place_number(t.key, end, &tx);
+    if (!p || p >= end || *p != ',') {
+      continue;
+    }
+    p = bdfi_place_number(p + 1, end, &ty);
+    if (!p || p != end || tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) {
+      continue;
+    }
+    places[n].tx = tx;
+    places[n].ty = ty;
+    places[n].tile = i;
+    n++;
+  }
+  if (n > 1) {
+    qsort(places, n, sizeof *places, bdfi_sheet_tile_cmp);
+  }
+  *out = places;
+  return n;
+}
+
 /* A region of a sheet: the background, the gridlines when the view asks for
  * them, and the tiles. */
 static bdf_status bdfi_draw_sheet(struct bdf_renderer *r, size_t view, const bdf_view *v,
@@ -916,48 +958,9 @@ static bdf_status bdfi_draw_sheet(struct bdf_renderer *r, size_t view, const bdf
   if (v->gridlines) {
     bdfi_gridlines(d, view, v, region, &m);
   }
-  double tile = (double)v->tile_stated;
-  if (tile <= 0) {
-    tile = 2048;
-  }
-  if (!(tile >= 1) || bdfi_isinf(tile)) {
-    /* a region would hold any number of them */
-    bdfi_r_warnf(r, "the tiles of a sheet are %g units wide: they are not drawn", tile);
-    return bdfi_finish(d, out, err);
-  }
-#define INDEX(x) ((int64_t)floor(bdfi_clampf((x) / tile)))
-  int64_t tx0 = INDEX((double)region[0]), ty0 = INDEX((double)region[1]);
-  int64_t tx1 = INDEX((double)(region[0] + region[2]) - 1e-6);
-  int64_t ty1 = INDEX((double)(region[1] + region[3]) - 1e-6);
-#undef INDEX
-  bdfi_place *places = v->ntiles ? bdfi_malloc_array(v->ntiles, sizeof *places) : NULL;
-  size_t nplaces = 0;
-  if (v->ntiles && !places) {
-    r->oom = 1;
-  }
-  for (size_t i = 0; places && i < v->ntiles; i++) {
-    bdf_tile t;
-    int64_t tx, ty;
-    if (bdf_doc_tile(r->doc, view, i, &t) != BDF_OK) {
-      continue;
-    }
-    const char *end = t.key + t.key_len;
-    const char *p = bdfi_place_number(t.key, end, &tx);
-    if (!p || p >= end || *p != ',') {
-      continue;
-    }
-    p = bdfi_place_number(p + 1, end, &ty);
-    if (!p || p != end || tx < tx0 || tx > tx1 || ty < ty0 || ty > ty1) {
-      continue;
-    }
-    places[nplaces].tx = tx;
-    places[nplaces].ty = ty;
-    places[nplaces].tile = i;
-    nplaces++;
-  }
-  if (nplaces > 1) {
-    qsort(places, nplaces, sizeof *places, bdfi_place_cmp);
-  }
+  double tile;
+  bdfi_sheet_tile *places;
+  size_t nplaces = bdfi_sheet_tiles(r, view, v, region, &tile, &places);
   for (size_t i = 0; i < nplaces && !r->oom; i++) {
     bdf_tile t;
     uint8_t hash[16];

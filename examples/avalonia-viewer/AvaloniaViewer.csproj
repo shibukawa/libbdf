@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AssemblyName>avalonia-viewer</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.4" />
+    <!-- for drawing a page without a screen (snapshot) -->
+    <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
+    <!-- libbdf for .NET from this checkout. A project of your own takes the
+         NuGet packages instead: LibBdf and LibBdf.SkiaSharp. -->
+    <ProjectReference Include="../../dotnet/LibBdf/LibBdf.csproj" />
+    <ProjectReference Include="../../dotnet/LibBdf.SkiaSharp/LibBdf.SkiaSharp.csproj" />
+  </ItemGroup>
+</Project>

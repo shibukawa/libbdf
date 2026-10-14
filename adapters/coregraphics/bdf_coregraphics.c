@@ -503,11 +503,13 @@ static void bdf_cg_image_fn(void *c, const bdf_canvas_bitmap *bitmap, const doub
   CGImageRelease(part);
 }
 
-static void bdf_cg_begin_layer(void *c, const double bounds[4], float alpha, uint8_t blend) {
-  CGContextRef ctx = ((bdf_cg *)c)->ctx;
+static void bdf_cg_begin_layer(void *c, const double bounds[4], const bdf_canvas_style *style) {
+  bdf_cg *cg = c;
+  CGContextRef ctx = cg->ctx;
   CGContextSaveGState(ctx);
-  CGContextSetAlpha(ctx, alpha);
-  CGContextSetBlendMode(ctx, bdf_cg_blend(blend));
+  /* the alpha, the blend mode and the shadow the layer is composited with:
+   * inside it Quartz draws without them */
+  bdf_cg_state(cg, style);
   CGContextBeginTransparencyLayerWithRect(ctx,
                                           CGRectMake(bounds[0], bounds[1], bounds[2], bounds[3]),
                                           NULL);
@@ -546,6 +548,13 @@ bdf_status bdf_cg_draw_page(bdf_cg *cg, size_t view, size_t page, CGContextRef c
   bdf_canvas canvas;
   bdf_cg_canvas(cg, ctx, &canvas);
   return bdf_play_page(cg->renderer, view, page, bdf_cg_scale(cg), &canvas, err);
+}
+
+bdf_status bdf_cg_draw_region(bdf_cg *cg, size_t view, size_t page, const float region[4],
+                              CGContextRef ctx, bdf_error *err) {
+  bdf_canvas canvas;
+  bdf_cg_canvas(cg, ctx, &canvas);
+  return bdf_play_region(cg->renderer, view, page, region, bdf_cg_scale(cg), &canvas, err);
 }
 
 bdf_status bdf_cg_draw_part(bdf_cg *cg, const uint8_t hash[16], CGContextRef ctx, bdf_error *err) {

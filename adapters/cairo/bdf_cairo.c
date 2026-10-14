@@ -479,9 +479,10 @@ static void bdf_cairo_image_fn(void *ctx, const bdf_canvas_bitmap *bitmap, const
   cairo_surface_destroy(whole);
 }
 
-static void bdf_cairo_begin_layer(void *ctx, const double bounds[4], float alpha, uint8_t blend) {
+static void bdf_cairo_begin_layer(void *ctx, const double bounds[4],
+                                  const bdf_canvas_style *style) {
   bdf_cairo *bc = ctx;
-  (void)bounds;
+  (void)bounds; /* (and the shadow: cairo has none) */
   if (bc->nlayers == bc->cap_layers) {
     size_t cap = bc->cap_layers ? 2 * bc->cap_layers : 8;
     bdf_cairo_layer *layers = realloc(bc->layers, cap * sizeof *layers);
@@ -493,8 +494,8 @@ static void bdf_cairo_begin_layer(void *ctx, const double bounds[4], float alpha
     bc->layers = layers;
     bc->cap_layers = cap;
   }
-  bc->layers[bc->nlayers].alpha = alpha;
-  bc->layers[bc->nlayers].op = bdf_cairo_operator(blend);
+  bc->layers[bc->nlayers].alpha = style->alpha;
+  bc->layers[bc->nlayers].op = bdf_cairo_operator(style->blend);
   bc->nlayers++;
   cairo_save(bc->cr);
   cairo_push_group(bc->cr);
@@ -542,6 +543,14 @@ bdf_status bdf_cairo_draw_page(bdf_cairo *bc, size_t view, size_t page, cairo_t 
   bdf_cairo_canvas(bc, cr, &canvas);
   bc->nlayers = 0;
   return bdf_play_page(bc->renderer, view, page, bdf_cairo_scale(cr), &canvas, err);
+}
+
+bdf_status bdf_cairo_draw_region(bdf_cairo *bc, size_t view, size_t page, const float region[4],
+                                 cairo_t *cr, bdf_error *err) {
+  bdf_canvas canvas;
+  bdf_cairo_canvas(bc, cr, &canvas);
+  bc->nlayers = 0;
+  return bdf_play_region(bc->renderer, view, page, region, bdf_cairo_scale(cr), &canvas, err);
 }
 
 bdf_status bdf_cairo_draw_part(bdf_cairo *bc, const uint8_t hash[16], cairo_t *cr, bdf_error *err) {
