@@ -2,7 +2,8 @@ name: release
 
 # A tag v<version> makes a draft release with what packaging/README.md
 # lists: the single header, the binaries of each platform, the xcframework,
-# the NuGet packages and the Android library. Dispatched by hand, or for a pull request that
+# the NuGet packages and the Android library; and uploads the Android
+# library to Maven Central, where it waits to be published. Dispatched by hand, or for a pull request that
 # changes this file or the scripts it runs, it builds the same, checks that
 # every file of a release is there (packaging/release-files.sh) and leaves
 # them as artifacts of the run, without a release.
@@ -16,6 +17,7 @@ on:
       - "packaging/xcframework.sh"
       - "packaging/release-files.sh"
       - "android/libbdf/build.gradle.kts"
+      - "packaging/maven-central.sh"
   workflow_dispatch:
 
 permissions:
@@ -162,3 +164,40 @@ jobs:
           echo "$files"
           # (no path of them has a space in it)
           gh release create "$GITHUB_REF_NAME" --draft --title "$GITHUB_REF_NAME" --generate-notes $files
+
+  # The Android library to Maven Central, for a tag, once the files of the
+  # release are checked: signed with the key of the secrets, bundled and
+  # uploaded to the Central Portal (packaging/maven-central.sh), where the
+  # deployment waits for its Publish button. Without the secrets the job
+  # says so and uploads nothing.
+  maven-central:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: assets
+    runs-on: ubuntu-latest
+    env:
+      ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+      ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+      CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: The secrets
+        id: secrets
+        run: |
+          if [ -z "$ORG_GRADLE_PROJECT_signingKey" ] || [ -z "$CENTRAL_USERNAME" ] || [ -z "$CENTRAL_PASSWORD" ]; then
+            echo "::notice::no secrets for Maven Central (MAVEN_SIGNING_KEY, MAVEN_SIGNING_PASSWORD, CENTRAL_USERNAME, CENTRAL_PASSWORD): nothing is uploaded"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+      - name: The NDK and the CMake the build names
+        if: steps.secrets.outputs.skip != '1'
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "cmake;3.22.1" > /dev/null
+      - name: Sign
+        if: steps.secrets.outputs.skip != '1'
+        run: android/gradlew -p android --console=plain :libbdf:publishReleasePublicationToBuildRepository
+      - name: Bundle and upload
+        if: steps.secrets.outputs.skip != '1'
+        run: |
+          version=$(sed -n 's/^#define BDF_VERSION_STRING *"\(.*\)"/\1/p' include/bdf/bdf.h)
+          bundle="$RUNNER_TEMP/libbdf-android-$version-central.zip"
+          packaging/maven-central.sh bundle android/libbdf/build/repo "$bundle"
+          packaging/maven-central.sh upload "$bundle"

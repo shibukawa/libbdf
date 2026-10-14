@@ -35,5 +35,8 @@ will do has been done before. Two things are still by hand afterwards:
   source archive (vcpkg prints it), and `vcpkg.json`'s version;
 - `packaging/meson/bdf.wrap`: its `revision`.
 
-Neither a registry of vcpkg, ConanCenter, the WrapDB, nuget.org nor Maven
-Central has libbdf yet: these files are what would be sent there.
+A tag also uploads the Android library to Maven Central, when the
+repository has the secrets for it (android/README.md lists them): it
+waits there to be published by hand. Neither a registry of vcpkg,
+ConanCenter, the WrapDB nor nuget.org has libbdf yet: these files are
+what would be sent there.

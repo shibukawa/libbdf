@@ -69,4 +69,24 @@ The tests open, unlock, search and draw the documents of `libbdf/src/androidTest
 
 ## Maven Central
 
-`publishReleasePublicationToBuildRepository` writes what Maven Central takes: the AAR, its POM and its sources, under `io/github/shibukawa/libbdf/<version>/`. Publishing it needs the namespace `io.github.shibukawa` on the Central Portal, a GPG key to sign the files, and their upload; none of that is set up yet.
+A tag `v<version>` uploads the library to Maven Central (the job `maven-central` of `.github/workflows/release.yml`): the release build is signed, bundled and sent to the Central Portal, where the deployment waits, validated, for its Publish button. What it needs, as secrets of the repository:
+
+| Secret | What |
+|---|---|
+| `CENTRAL_USERNAME`, `CENTRAL_PASSWORD` | a user token of central.sonatype.com (Account, Generate User Token) |
+| `MAVEN_SIGNING_KEY` | the private key that signs, ASCII-armoured (`gpg --armor --export-secret-keys <id>`); its public key on a key server Central reads (keys.openpgp.org, keyserver.ubuntu.com) |
+| `MAVEN_SIGNING_PASSWORD` | its passphrase |
+
+Without them the job says so and uploads nothing. The group, `io.github.shibukawa`, is set in `libbdf/build.gradle.kts`: it has to be a namespace verified for the account of the token.
+
+By hand, the same:
+
+```bash
+cd android
+ORG_GRADLE_PROJECT_signingKey="$(gpg --armor --export-secret-keys <id>)" ORG_GRADLE_PROJECT_signingPassword=... \
+  ./gradlew :libbdf:publishReleasePublicationToBuildRepository
+../packaging/maven-central.sh bundle libbdf/build/repo bundle.zip
+CENTRAL_USERNAME=... CENTRAL_PASSWORD=... ../packaging/maven-central.sh upload bundle.zip
+```
+
+`CENTRAL_PUBLISHING=AUTOMATIC` publishes without waiting for the button.

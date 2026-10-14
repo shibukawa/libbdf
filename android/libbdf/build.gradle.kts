@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     id("com.android.library")
     `maven-publish`
+    signing
 }
 
 // The version of libbdf, as its header says.
@@ -44,6 +45,7 @@ android {
     publishing {
         singleVariant("release") {
             withSourcesJar()
+            withJavadocJar()
         }
     }
 }
@@ -61,8 +63,10 @@ dependencies {
 }
 
 // `./gradlew :libbdf:publishReleasePublicationToBuildRepository` writes the
-// AAR, its sources and its POM as a Maven repository under build/repo: what
-// a release attaches, and what would go to Maven Central.
+// AAR, its sources, its documentation and its POM as a Maven repository
+// under build/repo: what a release attaches, and with signatures what goes
+// to Maven Central (packaging/maven-central.sh). The group is the namespace
+// of the publisher on Maven Central.
 publishing {
     publications {
         register<MavenPublication>("release") {
@@ -82,8 +86,17 @@ publishing {
                         url.set("https://github.com/shibukawa/libbdf/blob/main/LICENSE")
                     }
                 }
+                developers {
+                    developer {
+                        id.set("shibukawa")
+                        name.set("Yoshiki Shibukawa")
+                        url.set("https://github.com/shibukawa")
+                    }
+                }
                 scm {
                     url.set("https://github.com/shibukawa/libbdf")
+                    connection.set("scm:git:https://github.com/shibukawa/libbdf.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/shibukawa/libbdf.git")
                 }
             }
         }
@@ -93,5 +106,18 @@ publishing {
             name = "build"
             url = uri(layout.buildDirectory.dir("repo"))
         }
+    }
+}
+
+// Signatures, which Maven Central asks for: with a key in the Gradle
+// properties signingKey (ASCII-armoured) and signingPassword, as the release
+// workflow gives them from its secrets (ORG_GRADLE_PROJECT_signingKey,
+// ORG_GRADLE_PROJECT_signingPassword), every file of the publication gets
+// its .asc. Without a key (or with an empty one) nothing is signed.
+signing {
+    val key = providers.gradleProperty("signingKey").orNull?.takeIf { it.isNotBlank() }
+    if (key != null) {
+        useInMemoryPgpKeys(key, providers.gradleProperty("signingPassword").orNull)
+        sign(publishing.publications)
     }
 }
