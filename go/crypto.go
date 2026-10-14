@@ -77,13 +77,13 @@ func P256ECDH(private [32]byte, peer [65]byte) (out [32]byte, rc int) {
 	return out, rc
 }
 
-// NFC normalises a string with bdfi_nfc.
-func NFC(s string) string {
+// NFKC normalises a string with bdfi_nfkc.
+func NFKC(s string) string {
 	var out *C.char
 	var n C.size_t
 	b := []byte(s)
-	if C.bdfi_nfc((*C.char)(unsafe.Pointer(ptr(b))), C.size_t(len(b)), &out, &n) != 0 {
-		panic("bdfi_nfc: out of memory")
+	if C.bdfi_nfkc((*C.char)(unsafe.Pointer(ptr(b))), C.size_t(len(b)), &out, &n) != 0 {
+		panic("bdfi_nfkc: out of memory")
 	}
 	defer C.free(unsafe.Pointer(out))
 	return goString(out, n)

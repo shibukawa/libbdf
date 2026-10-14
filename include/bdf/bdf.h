@@ -201,7 +201,8 @@ BDF_API int bdf_doc_locked(const bdf_doc *doc);
 
 /*
  * bdf_doc_unlock opens an encrypted document with its password (UTF-8; it is
- * normalised to NFC, as the format asks): the sealed manifest becomes the
+ * normalised to NFKC, as the format asks, so full-width and half-width
+ * spellings are one password): the sealed manifest becomes the
  * manifest of the document, with its views, and bdf_doc_part opens the
  * parts. BDF_ERR_PASSWORD when no key slot opens with the password; the
  * document then stays locked, and another password can be tried. A document

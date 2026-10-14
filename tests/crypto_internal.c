@@ -220,23 +220,23 @@ static void test_p256(void) {
   CHECK(bdfi_p256_ecdh(priv, pub, z) == -2);
 }
 
-static void test_nfc(void) {
+static void test_nfkc(void) {
   size_t in = 0, want = 0;
-  for (size_t i = 0; i < CV_NFC_CASES; i++) {
+  for (size_t i = 0; i < CV_NFKC_CASES; i++) {
     char *out = NULL;
     size_t n = 0;
-    CHECK(bdfi_nfc((const char *)cv_nfc_in + in, cv_nfc_in_lens[i], &out, &n) == 0);
-    if (n != cv_nfc_want_lens[i] || memcmp(out, cv_nfc_want + want, n) != 0) {
+    CHECK(bdfi_nfkc((const char *)cv_nfkc_in + in, cv_nfkc_in_lens[i], &out, &n) == 0);
+    if (n != cv_nfkc_want_lens[i] || memcmp(out, cv_nfkc_want + want, n) != 0) {
       failures++;
-      fprintf(stderr, "form C of case %zu is %zu bytes, want %zu\n", i, n, cv_nfc_want_lens[i]);
+      fprintf(stderr, "form KC of case %zu is %zu bytes, want %zu\n", i, n, cv_nfkc_want_lens[i]);
     }
     CHECK(out && out[n] == 0);
     free(out);
-    in += cv_nfc_in_lens[i];
-    want += cv_nfc_want_lens[i];
+    in += cv_nfkc_in_lens[i];
+    want += cv_nfkc_want_lens[i];
   }
   /* a long run of marks is put in order whole (x/text breaks it with a
-   * joiner after 30, which is not form C) */
+   * joiner after 30, which is not form KC) */
   char run[1 + 2 * 200];
   run[0] = 'a';
   for (int i = 0; i < 200; i++) {
@@ -246,7 +246,7 @@ static void test_nfc(void) {
   }
   char *out = NULL;
   size_t n = 0;
-  CHECK(bdfi_nfc(run, sizeof run, &out, &n) == 0);
+  CHECK(bdfi_nfkc(run, sizeof run, &out, &n) == 0);
   /* a + the first dot below is U+1EA1; then 99 dots below, then 100 acutes */
   CHECK(n == 3 + 2 * 199);
   CHECK(n > 3 && memcmp(out, "\xE1\xBA\xA1", 3) == 0);
@@ -274,7 +274,7 @@ int main(void) {
   test_key_wrap();
   test_gcm();
   test_p256();
-  test_nfc();
+  test_nfkc();
   test_wipe();
   return finish();
 }

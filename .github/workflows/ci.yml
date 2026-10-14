@@ -318,7 +318,7 @@ jobs:
       - name: go test -fuzz
         working-directory: go
         run: |
-          for t in FuzzObject FuzzInflate FuzzDoc FuzzWOFF2 FuzzText FuzzIndexPart FuzzUnlock FuzzSealed FuzzNFC FuzzGCM FuzzP256 FuzzPNG FuzzJpeg FuzzGif FuzzBmp FuzzWebp FuzzFont; do
+          for t in FuzzObject FuzzInflate FuzzDoc FuzzWOFF2 FuzzText FuzzIndexPart FuzzUnlock FuzzSealed FuzzNFKC FuzzGCM FuzzP256 FuzzPNG FuzzJpeg FuzzGif FuzzBmp FuzzWebp FuzzFont; do
             go test -run '^$' -fuzz "^$t\$" -fuzztime "${{ github.event.inputs.fuzz-minutes }}m" -fuzzminimizetime 20x .
           done
           # the reader of SVG documents has its tests in a package of its own

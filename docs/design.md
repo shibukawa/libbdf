@@ -54,7 +54,7 @@ core のうち今あるのは読みの部分で、libc 以外に依存しない�
 - **サニタイザ**: CI は単体テストを ASan と UBSan 付きでもう 1 度回す。C ではこれが最も安い安全網で、既存の入力で起きるメモリ破壊の大半がここで出る。
 - **差分テスト**（`go/`）: testdata の全文書、全 Part、全 Object、全フォントを Go と C の両方で読んで比べる。Linux では `go test -asan` で C 側も計装する。cgo が C ソースを直接コンパイルするので、ハーネスとライブラリは常に同じコミットになる。`go/` にあるのは `src/` と `third_party/brotli` の C ファイルへのシンボリックリンクで、`#include` で束ねたラッパーではない。Go のビルドキャッシュはパッケージ内のファイルの中身しか見ず、include 先の変更に気づかないので、ラッパー方式では C を直しても古いオブジェクトで `go test` が通ってしまう（実際に一度起きた）。リンクなら中身を読むのでキャッシュが追従する。
 - **適合テスト**: bdf の `bdf conformance` が書く suite を `tests/conformance.c` が Go なしで流す（§7）。
-- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock・search・render の 9 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
+- **fuzz は明示実行**: CI では回さない。探索は時間が青天井で CI に向かないという判断で、bdf の運用（パーサを変えたときに数分回す）と同じにした。探索は 2 系統ある。カバレッジ誘導とリーク検出は C の libFuzzer（`fuzz/`、object・inflate・manifest・doc・woff2・text・unlock・search・render の 9 本）、Go の参照実装との差分は `go test -fuzz`（`FuzzObject`、`FuzzInflate`、`FuzzDoc`、`FuzzWOFF2`、`FuzzText`、`FuzzIndexPart`、`FuzzUnlock`、`FuzzSealed`、`FuzzNFKC`、`FuzzGCM`、`FuzzP256`）。互いを何度も描く Object は「再利用した命令 2^27」の上限で止まるが、そこまで数秒かかる。fuzz のビルドは `BDF_MAX_REUSED_INSTRUCTIONS` を 65536 に下げ、単体テストは内部の `max_reused` を下げて、この経路を速く通す。見つかった入力は手で `fuzz/regress/<target>/`（ctest の `replay-<target>` が流す）か `go/testdata/fuzz/`（`go test` が流す）に入れて再生テストにする。`fuzz/corpus/` は fuzzer が育てる作業用のコーパスで、コミットしない。CI の `fuzz` ジョブは `workflow_dispatch` で分数を指定したときだけ動く。`go test -fuzz` は新しい経路に届いた入力を 1 件あたり最大 60 秒かけて最小化するので、文書まるごとを入力にする `FuzzUnlock` は実行数が伸びず止まって見える（0 execs/sec）。`-fuzzminimizetime 20x` を付けて回す。
 
 cgo を選んで purego にしなかったのは、`go build -asan` が cgo にしか効かないことと、同じツリーの C ソースを静的に結合したかったからである。利用者向けに cgo なしの Go 束縛を出すなら、そのときは purego で別に作る。
 
@@ -142,11 +142,11 @@ ABI は SONAME（`libbdf.so.0`）と `bdf_version()` を持ち、コンパイラ
 - P-256 のスカラー倍は秘密鍵に依存しない。完全な加法公式（Renes–Costello–Batina、a = −3。Go の `nistec` と同じ）を使い、常に倍算と加算の両方を計算して、結果を定数時間の選択で取る。体の演算は 32 ビット limb の Montgomery 乗算で、分岐は最後の減算の選択だけ（これもマスク）。
 - GCM のタグ、AES-KW の検査値の比較は定数時間。タグが合わなければ平文は 1 バイトも書かない。
 - AES は S-box の表引き、GHASH は 4 ビットの表引きで、**キャッシュ タイミングには耐性がない**。Go の `crypto/aes` も AES-NI のない環境では同じ表引きに落ちる。読み手は自分の文書を自分の鍵で開けるだけなので、攻撃者が同じ機械で時間を測りながら復号を何度も走らせる場面は想定しにくい、という判断である。共有ホストで他人の文書を復号するサーバーに使うなら、この前提は成り立たない。
-- 鍵と、鍵から作った表は、使い終わったら `bdfi_wipe`（volatile 経由の書き込み）で消す。パスワードの NFC 形もそうする。
+- 鍵と、鍵から作った表は、使い終わったら `bdfi_wipe`（volatile 経由の書き込み）で消す。パスワードの NFKC 形もそうする。
 
-**パスワードの NFC**。spec はパスワードを NFC にして UTF-8 にすると定める。`src/unicode_nfc.h` は `golang.org/x/text` の表から `go/genunicode` が作る（Unicode 17.0.0、分解 2,081 件、結合クラス 403 区間、合成 961 対、表は約 55 KB）。ハングルは算術。`FuzzNFC` で x/text と突き合わせて、2 つ食い違いが出た。
+**パスワードの NFKC**。spec はパスワードを NFKC にして UTF-8 にすると定める（bdf 0.1.6 までは NFC だった。PDF 2.0 の SASLprep や NIST SP 800-63B と同じ向きで、全角と半角、半角カタカナと全角カタカナが同じパスワードになる。大文字小文字とかなの種類は区別する）。NFC で試し直すことはしないので、古い版が「NFKC で変わる文字を含むパスワード」で封印した文書は開かない。これは参照実装と同じ。libbdf の正規化は NFKC の 1 本だけになり、パスワード、フォントの家族名、検索が同じ関数（`bdfi_nfkc`、`bdfi_nfkc_points`）を使う。`src/unicode_nfc.h` は `golang.org/x/text` の表から `go/genunicode` が作る（Unicode 17.0.0、分解 2,081 件、結合クラス 403 区間、合成 961 対、表は約 55 KB）。ハングルは算術。`FuzzNFKC`（以前の `FuzzNFC`）で x/text と突き合わせて、2 つ食い違いが出た。
 
-- x/text は結合文字が 30 個を超えて続くと U+034F（CGJ）を挟む（Stream-Safe Text Format）。これは NFC そのものではなく、ブラウザの `String.prototype.normalize('NFC')` は挟まない。libbdf は挟まない。つまり **結合文字を 31 個以上続けたパスワード** は、Go の書き手と TS の読み手の間で鍵が食い違う（bdf 側の課題）。libbdf は TS と同じ鍵になる。差分テストはこの入力を飛ばす。
+- x/text は結合文字が 30 個を超えて続くと U+034F（CGJ）を挟む（Stream-Safe Text Format）。これは正規化そのものではなく、ブラウザの `String.prototype.normalize` は挟まない。libbdf は挟まない。つまり **結合文字を 31 個以上続けたパスワード** は、Go の書き手と TS の読み手の間で鍵が食い違う（bdf 側の課題）。libbdf は TS と同じ鍵になる。差分テストはこの入力を飛ばす。
 - 不正な UTF-8 のうち、末尾で足りないマルチバイトの先頭バイトは、x/text が残りをそのまま写す。libbdf はこれに合わせた（パスワードが正しい UTF-8 なら関係しない）。
 
 **上限**。`iter` は 1〜10,000,000、password スロットの合計も 10,000,000 まで、ecdh スロットは 16 個まで。参照実装と同じ値で、同じ順に検査する。遅い CPU 向けに `BDF_MAX_KDF_ITERATIONS` をビルド時に下げられる（fuzz のビルドは 2,048）。
