@@ -191,8 +191,11 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             // cell (the caller clips to it), with its edge up to the edge
             bool rx = paint->Repeat is Native.Repeat or Native.RepeatX;
             bool ry = paint->Repeat is Native.Repeat or Native.RepeatY;
+            // a pattern is interpolated between its pixels whatever the
+            // smoothing of images is, as the rasterizer draws it
             var shader = image.ToShader(rx ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp,
-                ry ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp, MatrixOf(paint->Matrix));
+                ry ? SKShaderTileMode.Repeat : SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear),
+                MatrixOf(paint->Matrix));
             if (owned)
             {
                 image.Dispose();
@@ -253,14 +256,11 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
                 return null;
             }
             paint.Shader = shader;
-            // a pattern is interpolated between its pixels whatever the
-            // smoothing of images is, as the rasterizer draws it
-            paint.FilterQuality = SKFilterQuality.Low;
             paint.ColorF = new SKColorF(1, 1, 1, style->Alpha);
         }
         else if (image)
         {
-            paint.FilterQuality = style->Smoothing != 0 ? SKFilterQuality.Low : SKFilterQuality.None;
+            // (how its pixels are sampled is given where it is drawn)
             paint.ColorF = new SKColorF(0, 0, 0, style->Alpha);
         }
         else
@@ -393,7 +393,7 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
         try
         {
             var matrix = MatrixOf(m);
-            self._canvas!.Concat(ref matrix);
+            self._canvas!.Concat(in matrix);
         }
         catch (Exception e)
         {
@@ -514,9 +514,12 @@ public sealed unsafe class BdfSkiaRenderer : IDisposable
             }
             using var paint = self.PaintOf(style, image: true)!;
             paint.BlendMode = ModeOf(style->Blend);
+            // interpolated between its pixels when the style smooths images
+            var sampling = new SKSamplingOptions(style->Smoothing != 0 ? SKFilterMode.Linear : SKFilterMode.Nearest);
             self._canvas!.DrawImage(image,
                 new SKRect((float)src[0], (float)src[1], (float)(src[0] + src[2]), (float)(src[1] + src[3])),
-                new SKRect((float)dst[0], (float)dst[1], (float)(dst[0] + dst[2]), (float)(dst[1] + dst[3])), paint);
+                new SKRect((float)dst[0], (float)dst[1], (float)(dst[0] + dst[2]), (float)(dst[1] + dst[3])),
+                sampling, paint);
             paint.ImageFilter?.Dispose();
             if (owned)
             {

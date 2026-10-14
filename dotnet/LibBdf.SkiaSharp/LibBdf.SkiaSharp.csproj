@@ -6,6 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../LibBdf/LibBdf.csproj" />
-    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
   </ItemGroup>
 </Project>
