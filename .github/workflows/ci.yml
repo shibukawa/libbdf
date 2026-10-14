@@ -380,6 +380,34 @@ jobs:
           ls -l thumbnails thumbnails-raster
           test -s thumbnails/pages-1.png && test -s thumbnails-raster/pages-2.png
 
+  # libbdf for Android (android/): the AAR of every ABI and the sample app
+  # built (the app with R8, as an application of the library runs it), and
+  # the tests of the library run on an x86_64 emulator: the pictures they
+  # draw are the ones libbdf draws on a desktop, to the byte.
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The NDK and the CMake the build names
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.3.13750724" "cmake;3.22.1" > /dev/null
+      - name: Build
+        run: android/gradlew -p android --console=plain :libbdf:assembleRelease :sample:assembleRelease :libbdf:publishReleasePublicationToBuildRepository
+      - name: What the AAR holds
+        run: |
+          unzip -l android/libbdf/build/outputs/aar/libbdf-release.aar
+          find android/libbdf/build/repo -type f | sort
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: The tests of the library on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          script: android/gradlew -p android --console=plain :libbdf:connectedDebugAndroidTest
+
   # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
   fuzz:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.fuzz-minutes != '0'

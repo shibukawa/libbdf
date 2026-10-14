@@ -20,6 +20,8 @@ want=(
   "xcframework/bdf.xcframework.zip.checksum"
   "nuget/LibBdf.$version.nupkg"
   "nuget/LibBdf.SkiaSharp.$version.nupkg"
+  "android/libbdf-android-$version.aar"
+  "android/libbdf-android-$version-maven.zip"
 )
 
 bad=0
@@ -74,6 +76,14 @@ for p in lib/net8.0/LibBdf.dll runtimes/linux-x64/native/libbdf.so runtimes/osx-
 done
 list=$(unzip -Z1 "$dir/nuget/LibBdf.SkiaSharp.$version.nupkg")
 has "the NuGet package of the adapter" "$list" "lib/net8.0/LibBdf.SkiaSharp.dll"
+list=$(unzip -Z1 "$dir/android/libbdf-android-$version.aar")
+for p in classes.jar AndroidManifest.xml jni/arm64-v8a/libbdf_jni.so jni/armeabi-v7a/libbdf_jni.so jni/x86_64/libbdf_jni.so; do
+  has "the AAR" "$list" "$p"
+done
+list=$(unzip -Z1 "$dir/android/libbdf-android-$version-maven.zip")
+for p in "libbdf-$version.aar" "libbdf-$version.pom" "libbdf-$version-sources.jar"; do
+  has "the Maven repository" "$list" "io/github/shibukawa/libbdf/libbdf/$version/$p"
+done
 [ $bad = 0 ] || exit 1
 
 for f in "${want[@]}"; do

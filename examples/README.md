@@ -11,6 +11,7 @@ Programs that use libbdf the way an application would, each a project of its own
 | [qt-viewer](qt-viewer/) | C++, Qt 6 | QPainter (`bdf::qt`) | a Qt Widgets application, and a page written as a PDF file through the same adapter |
 | [swiftui-viewer](swiftui-viewer/) | Swift | Core Graphics (the `BDF` Swift package) | a macOS app with SwiftUI, an encrypted document asking for its password |
 | [dotnet-thumbnails](dotnet-thumbnails/) | C# | SkiaSharp (`LibBdf.SkiaSharp`) | thumbnails of the pages, drawn on an `SKCanvas` or by the rasterizer |
+| [android/sample](../android/sample/) | Kotlin | libbdf's rasterizer, into `Bitmap`s | an Android app: a bundled document and any the user opens, pinch to zoom, pages, scroll views and sheets; built with the library in [android/](../android/) |
 
 What they share:
 

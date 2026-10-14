@@ -15,6 +15,7 @@ The CI builds a consumer through each of them (`packaging` in
 | Swift, Xcode | `Package.swift` at the root: products `BDF` (Swift), `CBDF`, `CBDFCoreGraphics` | add the repository as a package dependency |
 | Xcode without Swift packages | `bdf.xcframework` | an asset of every release (`packaging/xcframework.sh`) |
 | .NET (MAUI, SkiaSharp) | the NuGet packages `LibBdf` and `LibBdf.SkiaSharp` | `dotnet/`; packed by the release workflow |
+| Android (Kotlin, Java) | `io.github.shibukawa.libbdf:libbdf` on Maven Central, an AAR for arm64-v8a, armeabi-v7a and x86_64 | `android/`; the AAR and a Maven repository of it are assets of every release |
 
 `packaging/consumer/main.c` is the program each of them builds.
 
@@ -25,7 +26,7 @@ The release workflow (`.github/workflows/release.yml`) runs on a tag
 of each platform, the xcframework and the NuGet packages. Before it attaches
 them, `packaging/release-files.sh` checks that each is there, of the version
 of the header, with what it is for inside (the libraries of every platform
-in the NuGet package, say). The workflow also runs without a tag, when it is
+in the NuGet package, those of every ABI in the AAR, say). The workflow also runs without a tag, when it is
 dispatched by hand and for a pull request that changes it or its scripts:
 then it builds and checks the same and makes no release, so that what a tag
 will do has been done before. Two things are still by hand afterwards:
@@ -34,5 +35,9 @@ will do has been done before. Two things are still by hand afterwards:
   source archive (vcpkg prints it), and `vcpkg.json`'s version;
 - `packaging/meson/bdf.wrap`: its `revision`.
 
-Neither a registry of vcpkg, ConanCenter, the WrapDB nor nuget.org has
-libbdf yet: these files are what would be sent there.
+A tag also publishes the Android library on Maven Central, when the
+environment `release` of the repository has the secrets for it
+(android/README.md lists them); dispatched by hand, the workflow has the
+Portal validate it and drops it. Neither a registry of vcpkg,
+ConanCenter, the WrapDB nor nuget.org has libbdf yet: these files are
+what would be sent there.
