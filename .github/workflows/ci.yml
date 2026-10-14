@@ -319,7 +319,7 @@ jobs:
         run: |
           case "$RUNNER_OS" in
             Linux) sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev qt6-base-dev ;;
-            macOS) brew install sdl3 ;;
+            macOS) brew install sdl3 qt ;;
           esac
       - name: bdf-tool
         run: |
@@ -348,7 +348,7 @@ jobs:
           cmake --build build/qt-viewer
           QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/two-pages.bdf --pdf page1.pdf
           test -s page1.pdf
-      - name: sdl-viewer, swiftui-viewer
+      - name: sdl-viewer, swiftui-viewer, qt-viewer
         if: runner.os == 'macOS'
         run: |
           cmake -S examples/sdl-viewer -B build/sdl-viewer -DCMAKE_BUILD_TYPE=Release
@@ -356,7 +356,10 @@ jobs:
           SDL_VIDEODRIVER=dummy ./build/sdl-viewer/sdl-viewer samples/two-pages.bdf -screenshot sdl.png
           swift build --package-path examples/swiftui-viewer
           examples/swiftui-viewer/.build/debug/BDFViewer samples/two-pages.bdf --snapshot swiftui.png
-          test -s sdl.png && test -s swiftui.png
+          cmake -S examples/qt-viewer -B build/qt-viewer -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          cmake --build build/qt-viewer
+          QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/two-pages.bdf --pdf page1-macos.pdf
+          test -s sdl.png && test -s swiftui.png && test -s page1-macos.pdf
       - uses: actions/upload-artifact@v7
         with:
           name: examples-${{ matrix.name }}
@@ -368,6 +371,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # (Avalonia 12 takes a compiler of the .NET 9.0.300 SDK or later; the
+      # projects are for .NET 8, whose runtime runs them)
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - name: The shared library
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBDF_BUILD_TESTS=OFF
@@ -379,6 +389,18 @@ jobs:
           dotnet run --project examples/dotnet-thumbnails -c Release -- samples/two-pages.bdf thumbnails-raster --raster
           ls -l thumbnails thumbnails-raster
           test -s thumbnails/pages-1.png && test -s thumbnails-raster/pages-2.png
+      - name: avalonia-viewer, without a screen
+        run: |
+          export LD_LIBRARY_PATH="$PWD/build"
+          dotnet run --project examples/avalonia-viewer -c Release -- samples/two-pages.bdf --snapshot avalonia.png --page 2
+          test -s avalonia.png
+      - uses: actions/upload-artifact@v7
+        with:
+          name: examples-dotnet
+          path: |
+            thumbnails
+            thumbnails-raster
+            avalonia.png
 
   # libbdf for Android (android/): the AAR of every ABI and the sample app
   # built (the app with R8, as an application of the library runs it), and

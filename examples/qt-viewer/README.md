@@ -4,7 +4,7 @@ A viewer with Qt Widgets, drawing through libbdf's QPainter adapter: `bdf_qt_dra
 
 ```bash
 sudo apt install qt6-base-dev          # or brew install qt
-cmake -B build && cmake --build build
+cmake -B build && cmake --build build   # with Homebrew's Qt: -DCMAKE_PREFIX_PATH=$(brew --prefix qt)
 ./build/qt-viewer ../../samples/two-pages.bdf
 QT_QPA_PLATFORM=offscreen ./build/qt-viewer doc.bdf --pdf page1.pdf   # without a screen
 ```
