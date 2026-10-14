@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/klauspost/compress v1.20.1
-	github.com/shibukawa/bdf v0.1.7-0.20261014015942-93f53cdf8de6
+	github.com/shibukawa/bdf v0.1.7
 	golang.org/x/image v0.46.0
 	golang.org/x/net v0.60.0
 	golang.org/x/text v0.42.0
