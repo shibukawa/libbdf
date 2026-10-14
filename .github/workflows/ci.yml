@@ -294,6 +294,92 @@ jobs:
           cmake --build build --target test_conformance
           ctest --test-dir build -R '^conformance$' --output-on-failure --no-tests=error
 
+  # The programs of examples/, each built as a project of its own against
+  # this checkout, and run on samples/two-pages.bdf where they can run
+  # without a screen.
+  examples:
+    name: examples-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux, os: ubuntu-latest }
+          - { name: macos, os: macos-latest }
+          - { name: windows, os: windows-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+      - name: What the viewers draw with
+        run: |
+          case "$RUNNER_OS" in
+            Linux) sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-4-dev qt6-base-dev ;;
+            macOS) brew install sdl3 ;;
+          esac
+      - name: bdf-tool
+        run: |
+          cmake -S examples/bdf-tool -B build/bdf-tool -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/bdf-tool --config Release
+          tool=build/bdf-tool/bdf-tool
+          [ -f build/bdf-tool/Release/bdf-tool.exe ] && tool=build/bdf-tool/Release/bdf-tool.exe
+          "$tool" info samples/two-pages.bdf
+          "$tool" render samples/two-pages.bdf -page 2 -dpi 144 -o page2.png
+          "$tool" render samples/two-pages.bdf -region 10,10,50,40 -o region.png
+          "$tool" text samples/two-pages.bdf
+          test -s page2.png && test -s region.png
+      - name: single-header
+        run: |
+          cmake -S examples/single-header -B build/single-header -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/single-header --config Release
+          tool=build/single-header/bdf2txt
+          [ -f build/single-header/Release/bdf2txt.exe ] && tool=build/single-header/Release/bdf2txt.exe
+          "$tool" samples/two-pages.bdf
+      - name: gtk-viewer, qt-viewer
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S examples/gtk-viewer -B build/gtk-viewer -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/gtk-viewer
+          cmake -S examples/qt-viewer -B build/qt-viewer -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/qt-viewer
+          QT_QPA_PLATFORM=offscreen ./build/qt-viewer/qt-viewer samples/two-pages.bdf --pdf page1.pdf
+          test -s page1.pdf
+      - name: sdl-viewer, swiftui-viewer
+        if: runner.os == 'macOS'
+        run: |
+          cmake -S examples/sdl-viewer -B build/sdl-viewer -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/sdl-viewer
+          SDL_VIDEODRIVER=dummy ./build/sdl-viewer/sdl-viewer samples/two-pages.bdf -screenshot sdl.png
+          swift build --package-path examples/swiftui-viewer
+          examples/swiftui-viewer/.build/debug/BDFViewer samples/two-pages.bdf --snapshot swiftui.png
+          test -s sdl.png && test -s swiftui.png
+      - uses: actions/upload-artifact@v7
+        with:
+          name: examples-${{ matrix.name }}
+          path: |
+            *.png
+            *.pdf
+
+  examples-dotnet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The shared library
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DBDF_BUILD_TESTS=OFF
+          cmake --build build
+      - name: dotnet-thumbnails
+        run: |
+          export LD_LIBRARY_PATH="$PWD/build"
+          dotnet run --project examples/dotnet-thumbnails -c Release -- samples/two-pages.bdf thumbnails
+          dotnet run --project examples/dotnet-thumbnails -c Release -- samples/two-pages.bdf thumbnails-raster --raster
+          ls -l thumbnails thumbnails-raster
+          test -s thumbnails/pages-1.png && test -s thumbnails-raster/pages-2.png
+
   # Fuzzing, on request only: workflow_dispatch with fuzz-minutes > 0.
   fuzz:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.fuzz-minutes != '0'

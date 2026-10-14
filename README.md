@@ -17,6 +17,8 @@ What exists today is the core's reading side, the rasterizer, and the adapters:
 - adapters over it, each a header and a source file (`include/bdf/bdf_<name>.h`, `adapters/<name>/`): **cairo** (`bdf_cairo_draw_page`: an image, a PDF or SVG file, a GTK widget), **Core Graphics** (`bdf_cg_draw_page`: a bitmap, a PDF, an `NSView` or `UIView`), **QPainter** (`bdf_qt_draw_page`: a `QImage`, a `QWidget`, a `QPdfWriter`; Qt 6 or 5.15) and **Skia** (`bdf_skia_draw_page` on an `SkCanvas`: what Chrome draws a canvas with, and through SkiaSharp the way to .NET). The last two are C++
 - unit tests, libFuzzer targets, a differential test harness in Go that runs every document, part, object, font and text of the reference's test documents through both readers, and a runner for the reference's conformance suite
 
+[examples/](examples/) has programs that use it: a command-line tool, the single header on its own, viewers with SDL3, GTK 4, Qt and SwiftUI, and thumbnails with .NET and SkiaSharp.
+
 [docs/design.md](docs/design.md) (Japanese) holds the decisions behind the layout.
 
 ## Relation to bdf
