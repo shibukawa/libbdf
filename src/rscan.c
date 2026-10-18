@@ -175,6 +175,54 @@ static int bdfi_crossing_cmp(const void *pa, const void *pb) {
   return a->x < b->x ? -1 : a->x > b->x ? 1 : 0;
 }
 
+/*
+ * A sort by a key that is a double, in time proportional to n log n with
+ * the comparisons inline: runs of 16 sorted by insertion, then merged
+ * through tmp, which holds n items. Items of one key may end up in any
+ * order, as they may with qsort: nothing drawn depends on their order.
+ */
+#define BDFI_DEFINE_SORT(name, type, key)                                                          \
+  static void name(type *a, type *tmp, size_t n) {                                                 \
+    for (size_t lo = 0; lo < n; lo += 16) {                                                        \
+      size_t end = n - lo < 16 ? n : lo + 16;                                                      \
+      for (size_t i = lo + 1; i < end; i++) {                                                      \
+        type v = a[i];                                                                             \
+        size_t k = i;                                                                              \
+        while (k > lo && v.key < a[k - 1].key) {                                                   \
+          a[k] = a[k - 1];                                                                         \
+          k--;                                                                                     \
+        }                                                                                          \
+        a[k] = v;                                                                                  \
+      }                                                                                            \
+    }                                                                                              \
+    type *from = a, *to = tmp;                                                                     \
+    for (size_t width = 16; width < n; width *= 2) {                                               \
+      for (size_t lo = 0; lo < n; lo += 2 * width) {                                               \
+        size_t mid = n - lo < width ? n : lo + width;                                              \
+        size_t hi = n - lo < 2 * width ? n : lo + 2 * width;                                       \
+        size_t i = lo, j = mid, k = lo;                                                            \
+        while (i < mid && j < hi) {                                                                \
+          to[k++] = from[j].key < from[i].key ? from[j++] : from[i++];                             \
+        }                                                                                          \
+        while (i < mid) {                                                                          \
+          to[k++] = from[i++];                                                                     \
+        }                                                                                          \
+        while (j < hi) {                                                                           \
+          to[k++] = from[j++];                                                                     \
+        }                                                                                          \
+      }                                                                                            \
+      type *t = from;                                                                              \
+      from = to;                                                                                   \
+      to = t;                                                                                      \
+    }                                                                                              \
+    if (from != a) {                                                                               \
+      memcpy(a, from, n * sizeof *a);                                                              \
+    }                                                                                              \
+  }
+
+BDFI_DEFINE_SORT(bdfi_sort_edges, bdfi_edge, y0)
+BDFI_DEFINE_SORT(bdfi_sort_crossings, bdfi_crossing, x)
+
 typedef struct bdfi_fill {
   bdfi_scratch *sc;
   size_t nedges;
@@ -260,7 +308,26 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
   }
   bdfi_edge *edges = sc->edges;
   size_t nedges = f.nedges;
-  qsort(edges, nedges, sizeof *edges, bdfi_edge_cmp);
+  /* room for the merges, or qsort when there is none for them */
+  if (sc->cap_edge_tmp < nedges) {
+    bdfi_edge *tmp = bdfi_realloc_array(sc->edge_tmp, nedges, sizeof *tmp);
+    if (tmp) {
+      sc->edge_tmp = tmp;
+      sc->cap_edge_tmp = nedges;
+    }
+  }
+  if (sc->cap_xs_tmp < nedges) {
+    bdfi_crossing *tmp = bdfi_realloc_array(sc->xs_tmp, nedges, sizeof *tmp);
+    if (tmp) {
+      sc->xs_tmp = tmp;
+      sc->cap_xs_tmp = nedges;
+    }
+  }
+  if (sc->cap_edge_tmp >= nedges) {
+    bdfi_sort_edges(edges, sc->edge_tmp, nedges);
+  } else {
+    qsort(edges, nedges, sizeof *edges, bdfi_edge_cmp);
+  }
   int w = BDFI_DX(r);
   bdfi_mask *m = bdfi_mask_new(r, 1);
   if (!m) {
@@ -313,6 +380,8 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
   const double dwgt = 1.0 / BDFI_SUB_SAMPLES;
   double left = (double)r.x0;
   for (int y = r.y0; y < r.y1; y++) {
+    /* the cells the spans of the row touch: [lo, hi] of area and cover */
+    int lo = w, hi = -1;
     for (int s = 0; s < BDFI_SUB_SAMPLES; s++) {
       double sy = (double)y + ((double)s + 0.5) / BDFI_SUB_SAMPLES;
       while (next < nedges && edges[next].y0 <= sy) {
@@ -373,7 +442,11 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
         }
       }
       if (!sorted) {
-        qsort(xs, nxs, sizeof *xs, bdfi_crossing_cmp);
+        if (sc->cap_xs_tmp >= nxs) {
+          bdfi_sort_crossings(xs, sc->xs_tmp, nxs);
+        } else {
+          qsort(xs, nxs, sizeof *xs, bdfi_crossing_cmp);
+        }
       }
       /* every edge that is active crosses: in this order next */
       if (nxs > BDFI_INSERTION_LIMIT && nxs == nactive) {
@@ -394,6 +467,12 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
           continue;
         }
         int ia = (int)xa, ib = (int)xb;
+        if (ia < lo) {
+          lo = ia;
+        }
+        if (ib > hi) {
+          hi = ib;
+        }
         if (ia == ib) {
           area[ia] += (float)((xb - xa) * dwgt);
           continue;
@@ -406,23 +485,33 @@ bdfi_mask *bdfi_rasterize(bdfi_scratch *sc, const bdfi_pt *pts, const bdfi_poly 
         }
       }
     }
-    float *row = m->a + (size_t)(y - r.y0) * (size_t)w;
-    float run = 0;
-    for (int x = 0; x < w; x++) {
-      run += cover[x];
-      float v = area[x] + run;
-      if (v > 1) {
-        v = 1;
-      } else if (v < 0) {
-        v = 0;
+    /* The row from the first cell touched to the last: before it, nothing
+     * was added to area or cover, and the running sum is zero; after it
+     * the sum is the whole of it, exactly zero (the entries are multiples
+     * of a sixteenth, which a float adds without rounding, and each one
+     * added at ia + 1 was taken away at ib). The pixels there are zero,
+     * which the mask was made with. */
+    if (hi >= 0) {
+      float *row = m->a + (size_t)(y - r.y0) * (size_t)w;
+      float run = 0;
+      int end = hi < w ? hi : w - 1;
+      for (int x = lo; x <= end; x++) {
+        run += cover[x];
+        float v = area[x] + run;
+        if (v > 1) {
+          v = 1;
+        } else if (v < 0) {
+          v = 0;
+        }
+        row[x] = v;
+        area[x] = 0;
+        cover[x] = 0;
       }
-      row[x] = v;
-      area[x] = 0;
-      cover[x] = 0;
+      for (int x = end + 1; x <= hi; x++) {
+        area[x] = 0;
+        cover[x] = 0;
+      }
     }
-    cover[w] = 0;
-    cover[w + 1] = 0;
-    area[w] = 0;
     if (next >= nedges && nactive == 0) {
       break;
     }

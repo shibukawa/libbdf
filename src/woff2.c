@@ -642,6 +642,9 @@ static bdf_status bdfi_build_sfnt(uint32_t flavor, bdfi_w2_tables *ts, uint8_t *
                                   size_t *out_len) {
   qsort(ts->t, ts->n, sizeof *ts->t, bdfi_w2_cmp);
   size_t n = ts->n;
+  if (n > 0xffff) {
+    return BDF_ERR_FORMAT; /* numTables is 16 bits */
+  }
   size_t total = 12 + 16 * n;
   for (size_t i = 0; i < n; i++) {
     size_t padded = (ts->t[i].n + 3) & ~(size_t)3;

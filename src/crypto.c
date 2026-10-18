@@ -320,6 +320,132 @@ static void bdfi_aes_sub_bytes(uint8_t s[16], int inverse) {
   bdfi_wipe(q, sizeof q);
 }
 
+/*
+ * Encryption works on four blocks at a time, in the sliced form of
+ * BearSSL's aes_ct64: eight words of 64 bits hold bit i of every byte of
+ * the four blocks in word i, so that the S-box circuit, the shift of the
+ * rows and the mixing of the columns are a few dozen word operations for
+ * the four blocks together, with nothing indexed by a secret. The words of
+ * a block are read little-endian, as that code reads them; the form only
+ * has to be undone the same way.
+ */
+
+static uint32_t bdfi_load32le(const uint8_t *p) {
+  return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void bdfi_store32le(uint8_t *p, uint32_t v) {
+  p[0] = (uint8_t)v;
+  p[1] = (uint8_t)(v >> 8);
+  p[2] = (uint8_t)(v >> 16);
+  p[3] = (uint8_t)(v >> 24);
+}
+
+/* br_aes_ct64_interleave_in: the four words of a block as the two words of
+ * the sliced form it starts from. */
+static void bdfi_aes64_interleave_in(uint64_t *q0, uint64_t *q1, const uint32_t *w) {
+  uint64_t x0 = w[0], x1 = w[1], x2 = w[2], x3 = w[3];
+  x0 |= x0 << 16;
+  x1 |= x1 << 16;
+  x2 |= x2 << 16;
+  x3 |= x3 << 16;
+  x0 &= 0x0000FFFF0000FFFFULL;
+  x1 &= 0x0000FFFF0000FFFFULL;
+  x2 &= 0x0000FFFF0000FFFFULL;
+  x3 &= 0x0000FFFF0000FFFFULL;
+  x0 |= x0 << 8;
+  x1 |= x1 << 8;
+  x2 |= x2 << 8;
+  x3 |= x3 << 8;
+  x0 &= 0x00FF00FF00FF00FFULL;
+  x1 &= 0x00FF00FF00FF00FFULL;
+  x2 &= 0x00FF00FF00FF00FFULL;
+  x3 &= 0x00FF00FF00FF00FFULL;
+  *q0 = x0 | (x2 << 8);
+  *q1 = x1 | (x3 << 8);
+}
+
+/* br_aes_ct64_interleave_out: the reverse. */
+static void bdfi_aes64_interleave_out(uint32_t *w, uint64_t q0, uint64_t q1) {
+  uint64_t x0 = q0 & 0x00FF00FF00FF00FFULL, x1 = q1 & 0x00FF00FF00FF00FFULL;
+  uint64_t x2 = (q0 >> 8) & 0x00FF00FF00FF00FFULL, x3 = (q1 >> 8) & 0x00FF00FF00FF00FFULL;
+  x0 |= x0 >> 8;
+  x1 |= x1 >> 8;
+  x2 |= x2 >> 8;
+  x3 |= x3 >> 8;
+  x0 &= 0x0000FFFF0000FFFFULL;
+  x1 &= 0x0000FFFF0000FFFFULL;
+  x2 &= 0x0000FFFF0000FFFFULL;
+  x3 &= 0x0000FFFF0000FFFFULL;
+  w[0] = (uint32_t)x0 | (uint32_t)(x0 >> 16);
+  w[1] = (uint32_t)x1 | (uint32_t)(x1 >> 16);
+  w[2] = (uint32_t)x2 | (uint32_t)(x2 >> 16);
+  w[3] = (uint32_t)x3 | (uint32_t)(x3 >> 16);
+}
+
+static void bdfi_aes64_add_key(uint64_t *q, const uint64_t *sk) {
+  for (int i = 0; i < 8; i++) {
+    q[i] ^= sk[i];
+  }
+}
+
+/* ShiftRows in the sliced form: each 16 bits of a word are a row, four
+ * bits a column, and row r turns by r columns. */
+static void bdfi_aes64_shift_rows(uint64_t *q) {
+  for (int i = 0; i < 8; i++) {
+    uint64_t x = q[i];
+    q[i] = (x & 0x000000000000FFFFULL) | ((x & 0x00000000FFF00000ULL) >> 4) |
+           ((x & 0x00000000000F0000ULL) << 12) | ((x & 0x0000FF0000000000ULL) >> 8) |
+           ((x & 0x000000FF00000000ULL) << 8) | ((x & 0xF000000000000000ULL) >> 12) |
+           ((x & 0x0FFF000000000000ULL) << 4);
+  }
+}
+
+static uint64_t bdfi_aes64_rotr32(uint64_t x) { return (x << 32) | (x >> 32); }
+
+/* MixColumns in the sliced form (the xtime of a byte feeds its bit 7 back
+ * into bits 0, 1, 3 and 4: the q7 terms). */
+static void bdfi_aes64_mix_columns(uint64_t *q) {
+  uint64_t q0 = q[0], q1 = q[1], q2 = q[2], q3 = q[3], q4 = q[4], q5 = q[5], q6 = q[6], q7 = q[7];
+  uint64_t r0 = (q0 >> 16) | (q0 << 48), r1 = (q1 >> 16) | (q1 << 48);
+  uint64_t r2 = (q2 >> 16) | (q2 << 48), r3 = (q3 >> 16) | (q3 << 48);
+  uint64_t r4 = (q4 >> 16) | (q4 << 48), r5 = (q5 >> 16) | (q5 << 48);
+  uint64_t r6 = (q6 >> 16) | (q6 << 48), r7 = (q7 >> 16) | (q7 << 48);
+  q[0] = q7 ^ r7 ^ r0 ^ bdfi_aes64_rotr32(q0 ^ r0);
+  q[1] = q0 ^ r0 ^ q7 ^ r7 ^ r1 ^ bdfi_aes64_rotr32(q1 ^ r1);
+  q[2] = q1 ^ r1 ^ r2 ^ bdfi_aes64_rotr32(q2 ^ r2);
+  q[3] = q2 ^ r2 ^ q7 ^ r7 ^ r3 ^ bdfi_aes64_rotr32(q3 ^ r3);
+  q[4] = q3 ^ r3 ^ q7 ^ r7 ^ r4 ^ bdfi_aes64_rotr32(q4 ^ r4);
+  q[5] = q4 ^ r4 ^ r5 ^ bdfi_aes64_rotr32(q5 ^ r5);
+  q[6] = q5 ^ r5 ^ r6 ^ bdfi_aes64_rotr32(q6 ^ r6);
+  q[7] = q6 ^ r6 ^ r7 ^ bdfi_aes64_rotr32(q7 ^ r7);
+}
+
+/* bdfi_aes256_encrypt4 encrypts four blocks, given and returned as their
+ * sixteen little-endian words. */
+static void bdfi_aes256_encrypt4(const bdfi_aes *a, uint32_t w[16]) {
+  uint64_t q[8];
+  for (int i = 0; i < 4; i++) {
+    bdfi_aes64_interleave_in(&q[i], &q[i + 4], w + 4 * i);
+  }
+  bdfi_aes64_ortho(q);
+  bdfi_aes64_add_key(q, a->sk);
+  for (int round = 1; round < 14; round++) {
+    bdfi_aes64_sbox(q);
+    bdfi_aes64_shift_rows(q);
+    bdfi_aes64_mix_columns(q);
+    bdfi_aes64_add_key(q, a->sk + 8 * round);
+  }
+  bdfi_aes64_sbox(q);
+  bdfi_aes64_shift_rows(q);
+  bdfi_aes64_add_key(q, a->sk + 8 * 14);
+  bdfi_aes64_ortho(q);
+  for (int i = 0; i < 4; i++) {
+    bdfi_aes64_interleave_out(w + 4 * i, q[i], q[i + 4]);
+  }
+  bdfi_wipe(q, sizeof q);
+}
+
 void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]) {
   /* the key schedule: 15 round keys */
   memcpy(a->rk, key, 32);
@@ -339,6 +465,36 @@ void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]) {
       a->rk[i + k] = (uint8_t)(a->rk[i - 32 + k] ^ t[k]);
     }
   }
+  /* the round keys in the sliced form (br_aes_ct64_keysched and
+   * br_aes_ct64_skey_expand): a round key is the same for the four blocks,
+   * so each of its bits is one of four in a word, and the four are filled
+   * in from the one */
+  for (int r = 0; r < 15; r++) {
+    uint32_t w[4];
+    uint64_t q[8], c[2];
+    for (int i = 0; i < 4; i++) {
+      w[i] = bdfi_load32le(a->rk + 16 * r + 4 * i);
+    }
+    bdfi_aes64_interleave_in(&q[0], &q[4], w);
+    q[1] = q[2] = q[3] = q[0];
+    q[5] = q[6] = q[7] = q[4];
+    bdfi_aes64_ortho(q);
+    c[0] = (q[0] & 0x1111111111111111ULL) | (q[1] & 0x2222222222222222ULL) |
+           (q[2] & 0x4444444444444444ULL) | (q[3] & 0x8888888888888888ULL);
+    c[1] = (q[4] & 0x1111111111111111ULL) | (q[5] & 0x2222222222222222ULL) |
+           (q[6] & 0x4444444444444444ULL) | (q[7] & 0x8888888888888888ULL);
+    for (int u = 0; u < 2; u++) {
+      uint64_t x0 = c[u] & 0x1111111111111111ULL, x1 = (c[u] & 0x2222222222222222ULL) >> 1;
+      uint64_t x2 = (c[u] & 0x4444444444444444ULL) >> 2, x3 = (c[u] & 0x8888888888888888ULL) >> 3;
+      a->sk[8 * r + 4 * u] = (x0 << 4) - x0;
+      a->sk[8 * r + 4 * u + 1] = (x1 << 4) - x1;
+      a->sk[8 * r + 4 * u + 2] = (x2 << 4) - x2;
+      a->sk[8 * r + 4 * u + 3] = (x3 << 4) - x3;
+    }
+    bdfi_wipe(w, sizeof w);
+    bdfi_wipe(q, sizeof q);
+    bdfi_wipe(c, sizeof c);
+  }
 }
 
 static void bdfi_aes_add_key(uint8_t s[16], const uint8_t *rk) {
@@ -348,34 +504,15 @@ static void bdfi_aes_add_key(uint8_t s[16], const uint8_t *rk) {
 }
 
 void bdfi_aes256_encrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16]) {
-  uint8_t s[16], t[16];
-  memcpy(s, in, 16);
-  bdfi_aes_add_key(s, a->rk);
-  for (int round = 1; round <= 14; round++) {
-    /* SubBytes and ShiftRows: row r of the state moves r columns to the left */
-    for (int c = 0; c < 4; c++) {
-      for (int r = 0; r < 4; r++) {
-        t[4 * c + r] = s[4 * ((c + r) & 3) + r];
-      }
-    }
-    bdfi_aes_sub_bytes(t, 0);
-    if (round < 14) {
-      for (int c = 0; c < 4; c++) {
-        uint8_t *col = t + 4 * c;
-        uint8_t all = (uint8_t)(col[0] ^ col[1] ^ col[2] ^ col[3]);
-        uint8_t c0 = col[0];
-        col[0] ^= (uint8_t)(all ^ bdfi_xtime((uint8_t)(col[0] ^ col[1])));
-        col[1] ^= (uint8_t)(all ^ bdfi_xtime((uint8_t)(col[1] ^ col[2])));
-        col[2] ^= (uint8_t)(all ^ bdfi_xtime((uint8_t)(col[2] ^ col[3])));
-        col[3] ^= (uint8_t)(all ^ bdfi_xtime((uint8_t)(col[3] ^ c0)));
-      }
-    }
-    bdfi_aes_add_key(t, a->rk + 16 * round);
-    memcpy(s, t, 16);
+  uint32_t w[16] = {0};
+  for (int i = 0; i < 4; i++) {
+    w[i] = bdfi_load32le(in + 4 * i);
   }
-  memcpy(out, s, 16);
-  bdfi_wipe(s, sizeof s);
-  bdfi_wipe(t, sizeof t);
+  bdfi_aes256_encrypt4(a, w); /* the block alone, three of nothing with it */
+  for (int i = 0; i < 4; i++) {
+    bdfi_store32le(out + 4 * i, w[i]);
+  }
+  bdfi_wipe(w, sizeof w);
 }
 
 /* bdfi_gmul multiplies in GF(2^8). */
@@ -539,17 +676,29 @@ int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad
     bdfi_wipe(y, sizeof y);
     return -1;
   }
-  uint32_t n = 1;
+  /* the counter blocks four at a time, from the one after the tag's */
+  uint32_t n = 1, w[16];
+  uint8_t ks[64];
   for (size_t off = 0; off < ct_len;) {
-    n++;
-    bdfi_store32be(counter + 12, n);
-    bdfi_aes256_encrypt(&g->aes, counter, s);
-    size_t take = ct_len - off < 16 ? ct_len - off : 16;
+    for (int k = 0; k < 4; k++) {
+      n++;
+      bdfi_store32be(counter + 12, n);
+      for (int i = 0; i < 4; i++) {
+        w[4 * k + i] = bdfi_load32le(counter + 4 * i);
+      }
+    }
+    bdfi_aes256_encrypt4(&g->aes, w);
+    for (int i = 0; i < 16; i++) {
+      bdfi_store32le(ks + 4 * i, w[i]);
+    }
+    size_t take = ct_len - off < 64 ? ct_len - off : 64;
     for (size_t i = 0; i < take; i++) {
-      out[off + i] = (uint8_t)(ct[off + i] ^ s[i]);
+      out[off + i] = (uint8_t)(ct[off + i] ^ ks[i]);
     }
     off += take;
   }
+  bdfi_wipe(w, sizeof w);
+  bdfi_wipe(ks, sizeof ks);
   bdfi_wipe(s, sizeof s);
   return 0;
 }

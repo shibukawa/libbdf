@@ -424,6 +424,9 @@ typedef struct bdfi_svgr {
   /* the number of elements left to draw: use elements can repeat content
    * exponentially, as they can in a browser */
   int64_t budget;
+  /* and left to look at: the elements that draw nothing (defs, display:
+   * none) cost a visit each, and a use repeats them as well */
+  int64_t visits;
   /* the canvases of translucent elements in use, their pixels, and the
    * pixels of all that were */
   int layers;
@@ -2057,6 +2060,14 @@ static int bdfi_svg_not_drawn(const bdfi_svg_node *n) {
 static void bdfi_svgr_node(bdfi_svgr *sr, const bdfi_svg_node *n, const bdfi_svg_ctx *ctx,
                            const bdfi_svg_style *parent) {
   struct bdf_renderer *r = sr->r;
+  if (sr->visits <= 0) {
+    if (sr->visits == 0) {
+      sr->visits--;
+      bdfi_r_warn(r, "an SVG image has too many elements: the rest are not drawn");
+    }
+    return;
+  }
+  sr->visits--;
   if (bdfi_rs_is_text(n)) {
     return;
   }
@@ -2321,6 +2332,7 @@ static bdfi_picture *bdfi_svg_raster_in(struct bdf_renderer *r, bdfi_svg_image *
   sr.r = r;
   sr.si = si;
   sr.budget = BDFI_SVG_BUDGET;
+  sr.visits = 8 * (int64_t)BDFI_SVG_BUDGET;
   sr.inside = inside;
   bdfi_mat m = {{k, 0, 0, k, 0, 0}};
   bdfi_svgr_render(&sr, s, m, si->w, si->h);

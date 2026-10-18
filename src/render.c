@@ -16,6 +16,11 @@ static const char bdfi_path_limit[] = "a path is too complex to rasterize: it is
 
 /* ---- Warnings ------------------------------------------------------------ */
 
+/* The most warnings a renderer keeps: a document can make them without end
+ * (an object missing for each of its names), and each new one is looked
+ * for among those kept. The last kept says that there were more. */
+#define BDFI_MAX_WARNINGS 256
+
 void bdfi_r_warn(struct bdf_renderer *r, const char *message) {
   if (!r) {
     return;
@@ -24,6 +29,12 @@ void bdfi_r_warn(struct bdf_renderer *r, const char *message) {
     if (strcmp(r->warnings[i], message) == 0) {
       return;
     }
+  }
+  if (r->nwarnings >= BDFI_MAX_WARNINGS) {
+    return;
+  }
+  if (r->nwarnings == BDFI_MAX_WARNINGS - 1) {
+    message = "there were more warnings than are kept";
   }
   if (r->nwarnings == r->cap_warnings) {
     size_t cap = r->cap_warnings ? r->cap_warnings * 2 : 8;
@@ -268,8 +279,8 @@ bdfi_picture *bdfi_r_decode(struct bdf_renderer *r, const uint8_t *data, size_t 
    * decoded; one there is no room for while this image is drawn may find
    * some in the next */
   int32_t w, h;
-  if (bdfi_image_config(data, len, &w, &h) && w > 0 && h > 0 &&
-      (int64_t)w * h <= BDFI_MAX_DECODE_PIXELS && !bdfi_r_make_room(r, (int64_t)w * h)) {
+  int sized = bdfi_image_config(data, len, &w, &h) && w > 0 && h > 0;
+  if (sized && (int64_t)w * h <= BDFI_MAX_DECODE_PIXELS && !bdfi_r_make_room(r, (int64_t)w * h)) {
     bdfi_r_warnf(r, BDFI_TOO_MANY_PIXELS, (long long)r->room);
     *full = 1;
     return NULL;
@@ -281,6 +292,13 @@ bdfi_picture *bdfi_r_decode(struct bdf_renderer *r, const uint8_t *data, size_t 
   bdfi_picture *p = NULL;
   int format = BDFI_IMAGE_NONE;
   bdf_status st = bdfi_picture_decode(data, len, &p, &format);
+  if (st == BDF_OK && !sized && !bdfi_r_make_room(r, (int64_t)p->w * p->h)) {
+    /* one whose size could not be read before: room for it now, or not */
+    bdfi_r_warnf(r, BDFI_TOO_MANY_PIXELS, (long long)r->room);
+    bdfi_picture_free(p);
+    *full = 1;
+    return NULL;
+  }
   if (st == BDF_OK && !bdfi_r_keep(r, p, owner, flag)) {
     bdfi_picture_free(p);
     return NULL;

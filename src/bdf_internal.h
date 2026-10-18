@@ -500,7 +500,8 @@ BDF_INTERNAL void bdfi_hkdf_sha256(const uint8_t *ikm, size_t ikm_len, const uin
                                    uint8_t out[32]);
 
 typedef struct bdfi_aes {
-  uint8_t rk[240]; /* the 15 round keys of AES-256 */
+  uint8_t rk[240];  /* the 15 round keys of AES-256 */
+  uint64_t sk[120]; /* the same, in the sliced form that encrypts four blocks at a time */
 } bdfi_aes;
 
 BDF_INTERNAL void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]);

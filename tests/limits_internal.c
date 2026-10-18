@@ -9,6 +9,8 @@
 #undef BDF_MAX_RENDER_PIXELS
 #undef BDF_MAX_JSON_DEPTH
 #undef BDF_MAX_WOFF2_SIZE
+#undef BDF_MAX_FACE_SEGMENTS
+#define BDF_MAX_FACE_SEGMENTS 64
 #define BDF_MAX_PART_SIZE     1024
 #define BDF_MAX_MANIFEST_SIZE 512
 #define BDF_MAX_RENDER_PIXELS 16
@@ -18,6 +20,7 @@
 #include "bdf/bdf.h"
 #undef BDF_IMPLEMENTATION
 #include "inflate_vectors.h"
+#include "render_vectors.h"
 #include "testutil.h"
 
 typedef struct stream_input {
@@ -145,9 +148,80 @@ static void part_limits(void) {
   }
 }
 
+/* A face keeps the outlines of its glyphs up to BDF_MAX_FACE_SEGMENTS
+ * segments, then lets them go: asked for again, a glyph is read again, the
+ * same. */
+static void face_outlines(void) {
+  size_t evicted = 0;
+  for (size_t fi = 0; fi < sizeof rv_font / sizeof rv_font[0]; fi++) {
+    bdf_status st;
+    bdfi_face *f = bdfi_face_new(rv_fonts + rv_font[fi].off, rv_font[fi].len, 0, 0, &st);
+    if (!f) {
+      continue;
+    }
+    int oom = 0;
+    for (int pass = 0; pass < 2; pass++) {
+      for (uint16_t gid = 0; gid < 300 && !oom; gid++) {
+        size_t before = f->kept;
+        bdfi_rpath *p = bdfi_face_outline(f, gid, &oom);
+        if (!p) {
+          continue;
+        }
+        size_t cost = p->nsegs + p->nsubs;
+        if (f->kept < before + cost) {
+          evicted++;
+        }
+        /* used before the next is asked for, as the drawers use it */
+        bdfi_rpath *again = bdfi_face_outline(f, gid, &oom);
+        CHECK(again && again->nsegs == p->nsegs && again->nsubs == p->nsubs);
+        /* one outline over the budget is kept alone */
+        CHECK(f->kept <= BDF_MAX_FACE_SEGMENTS || f->kept == cost);
+      }
+    }
+    CHECK(!oom);
+    bdfi_face_free(f);
+  }
+  CHECK(evicted > 0); /* the budget was reached */
+}
+
+/* The stops of a gradient sorted by merging when there are many: the same
+ * table as sorting the few by insertion, whatever order they come in, and
+ * stops of one offset in the order they came. */
+static void gradient_stops(void) {
+  bdf_stop few[4] = {{0, 0x000000ff}, {0.5f, 0xff0000ff}, {0.5f, 0x0000ffff}, {1, 0xffffffff}};
+  bdf_stop many[40], shuffled[40];
+  memcpy(many, few, sizeof few);
+  for (size_t i = 4; i < 40; i++) {
+    many[i].offset = 0.999f - (float)(i - 4) * 0.002f; /* beyond 0.9, descending */
+    many[i].color = (uint32_t)(0x01010101u * (uint32_t)i) | 0xff;
+  }
+  bdfi_lut a, b;
+  bdfi_lut_build(&a, few, 4);
+  bdfi_lut_build(&b, many, 40);
+  /* up to 0.5 the tables are the same, and at 0.5 the first of the two
+   * stops there, the red one, in both */
+  for (int i = 0; i <= 512; i++) {
+    CHECK(memcmp(a.c[i], b.c[i], sizeof a.c[i]) == 0);
+  }
+  CHECK(a.c[512][0] == 1 && a.c[512][2] == 0);
+  /* distinct offsets in any order: one sorted order, so one table */
+  for (size_t i = 0; i < 40; i++) {
+    many[i].offset = (float)i / 39;
+    many[i].color = (uint32_t)(0x01010101u * (uint32_t)(i * 7)) | 0xff;
+  }
+  for (size_t i = 0; i < 40; i++) {
+    shuffled[i] = many[(i * 17 + 5) % 40];
+  }
+  bdfi_lut_build(&a, many, 40);
+  bdfi_lut_build(&b, shuffled, 40);
+  CHECK(memcmp(&a, &b, sizeof a) == 0);
+}
+
 int main(void) {
   stream_tests();
   part_limits();
+  face_outlines();
+  gradient_stops();
   bdfi_arena arena = {0};
   CHECK(bdfi_arena_strdup(&arena, "", SIZE_MAX) == NULL);
   CHECK(bdfi_malloc_array(SIZE_MAX / 2 + 1, 2) == NULL);

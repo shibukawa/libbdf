@@ -5,11 +5,25 @@
  * TypeScript reader (packages/core/src/text.ts): the LINK areas and the
  * structure the MARKs give the text (headings, lists, tables, figures).
  */
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "bdf_internal.h"
+
+/* The most states a walk keeps saved at a time, as the renderer keeps them
+ * (BDFI_MAX_STATES of the rasterizer): a SAVE is one byte, and a state a
+ * hundred, so a part of nothing but SAVEs would otherwise ask for a hundred
+ * times its size. Those beyond are not kept, and their RESTOREs restore
+ * nothing. */
+#define BDFI_TX_MAX_STATES 1024
+
+/* A double as a float, as Go converts one: beyond the range of a float it
+ * is infinite (C leaves the conversion undefined there). */
+static float bdfi_tx_f32(double v) {
+  return v > FLT_MAX ? INFINITY : v < -FLT_MAX ? -INFINITY : (float)v;
+}
 
 /* The runs, the links and the nodes of a walk are kept in memory, so all
  * three are bounded. */
@@ -465,10 +479,10 @@ bdf_status bdf_text_node_at(const bdf_text *t, size_t i, bdf_text_node *out) {
   out->alt_len = n->alt_len;
   out->has_bounds = n->has_bounds;
   if (n->has_bounds) {
-    out->x = (float)n->bounds.x;
-    out->y = (float)n->bounds.y;
-    out->w = (float)n->bounds.w;
-    out->h = (float)n->bounds.h;
+    out->x = bdfi_tx_f32(n->bounds.x);
+    out->y = bdfi_tx_f32(n->bounds.y);
+    out->w = bdfi_tx_f32(n->bounds.w);
+    out->h = bdfi_tx_f32(n->bounds.h);
   }
   return BDF_OK;
 }
@@ -1153,7 +1167,7 @@ static int bdfi_tx_walk(bdfi_tx *t, const bdf_object *o, const bdfi_tstate *from
   st.clip = from->clip;
   st.size = 10;
   bdfi_tstate *stack = NULL;
-  size_t nstack = 0, cap_stack = 0;
+  size_t nstack = 0, cap_stack = 0, unsaved = 0;
   int64_t masking = 0; /* inside MASK_BEGIN … MASK_END: a soft mask, not content */
   uint64_t max_reused =
       t->limits->max_reused ? t->limits->max_reused : (uint64_t)BDF_MAX_REUSED_INSTRUCTIONS;
@@ -1195,6 +1209,10 @@ static int bdfi_tx_walk(bdfi_tx *t, const bdf_object *o, const bdfi_tstate *from
     }
     switch (op) {
     case BDF_OP_SAVE:
+      if (nstack >= BDFI_TX_MAX_STATES) {
+        unsaved++;
+        break;
+      }
       if (nstack == cap_stack) {
         size_t cap = cap_stack ? cap_stack * 2 : 8;
         bdfi_tstate *grown = bdfi_realloc_array(stack, cap, sizeof *grown);
@@ -1208,7 +1226,9 @@ static int bdfi_tx_walk(bdfi_tx *t, const bdf_object *o, const bdfi_tstate *from
       stack[nstack++] = st;
       break;
     case BDF_OP_RESTORE:
-      if (nstack > 0) {
+      if (unsaved > 0) {
+        unsaved--;
+      } else if (nstack > 0) {
         st = stack[--nstack];
       }
       break;

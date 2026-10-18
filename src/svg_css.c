@@ -520,9 +520,13 @@ static bdfi_svg_group *bdfi_svg_find_group(bdfi_svg_css *css, int kind, bdfi_svg
   return NULL;
 }
 
-/* cssCompound.matches in css.go. */
-static int bdfi_svg_compound_matches(const bdfi_svg_compound *c, const bdfi_svg_node *n) {
+/* cssCompound.matches in css.go. The fields of the class attribute looked
+ * at are counted in *work: a selector of classes against an element of
+ * many is a scan, and a sheet may hold the selector many times. */
+static int bdfi_svg_compound_matches(const bdfi_svg_compound *c, const bdfi_svg_node *n,
+                                     uint64_t *work) {
   bdfi_svg_str v;
+  (*work)++;
   if (c->tag.n != 0 && bdfi_svg_str_cmp(c->tag, n->name) != 0) {
     return 0;
   }
@@ -537,6 +541,7 @@ static int bdfi_svg_compound_matches(const bdfi_svg_compound *c, const bdfi_svg_
       int found = 0;
       while (!found && bdfi_svg_next_field(v, &pos, &have)) {
         found = bdfi_svg_str_cmp(have, c->classes[i]) == 0;
+        (*work)++;
       }
       if (!found) {
         return 0;
@@ -548,13 +553,14 @@ static int bdfi_svg_compound_matches(const bdfi_svg_compound *c, const bdfi_svg_
 
 /* cssRule.matches in css.go: the last part matches the element, and the
  * parts before it ancestors of it, in their order. */
-static int bdfi_svg_rule_matches(const bdfi_svg_rule *r, const bdfi_svg_node *n) {
+static int bdfi_svg_rule_matches(const bdfi_svg_rule *r, const bdfi_svg_node *n,
+                                 uint64_t *work) {
   size_t k = r->nsel - 1; /* the parts before sel[k] are still to be found */
-  if (!bdfi_svg_compound_matches(&r->sel[k], n)) {
+  if (!bdfi_svg_compound_matches(&r->sel[k], n, work)) {
     return 0;
   }
   for (const bdfi_svg_node *p = n->parent; p && k > 0; p = p->parent) {
-    if (bdfi_svg_compound_matches(&r->sel[k - 1], p)) {
+    if (bdfi_svg_compound_matches(&r->sel[k - 1], p, work)) {
       k--;
     }
   }
@@ -573,7 +579,12 @@ static void bdfi_svg_match(bdfi_svg_css *css, const bdfi_svg_group *g, const bdf
       return;
     }
     const bdfi_svg_rule *r = css->keyed[g->first + i].rule;
-    if (!bdfi_svg_rule_matches(r, n)) {
+    int hit = bdfi_svg_rule_matches(r, n, &css->work);
+    if (css->work > BDFI_SVG_MAX_SHEET_WORK) {
+      css->status = BDF_ERR_TOO_LARGE;
+      return;
+    }
+    if (!hit) {
       continue;
     }
     if (css->nhits == css->hits_cap) {

@@ -47,21 +47,11 @@ static const double bdfi_cos_c[6] = {
     4.16666666666665929218e-2,   /* 0x3fa555555555554b */
 };
 
-int bdfi_isnan(double v) { return v != v; }
-int bdfi_isinf(double v) { return v == INFINITY || v == -INFINITY; }
-int bdfi_signbit(double v) {
-  uint64_t u;
-  memcpy(&u, &v, sizeof u);
-  return (int)(u >> 63);
-}
-
 static double bdfi_from_bits(uint64_t u) {
   double v;
   memcpy(&v, &u, sizeof v);
   return v;
 }
-
-static double bdfi_nan(void) { return bdfi_from_bits(0x7FF8000000000001ULL); }
 
 /* The binary digits of 4/pi, 64 at a time. */
 static const uint64_t bdfi_mpi4[20] = {
@@ -408,32 +398,6 @@ double bdfi_hypot(double p, double q) {
 
 /* math.Max and math.Min: an infinity of the right sign wins over a NaN, a
  * NaN over anything else, and +0 is more than -0. */
-double bdfi_fmax(double x, double y) {
-  if (x == INFINITY || y == INFINITY) {
-    return INFINITY;
-  }
-  if (bdfi_isnan(x) || bdfi_isnan(y)) {
-    return bdfi_nan();
-  }
-  if (x == 0 && x == y) {
-    return bdfi_signbit(x) ? y : x;
-  }
-  return x > y ? x : y;
-}
-
-double bdfi_fmin(double x, double y) {
-  if (x == -INFINITY || y == -INFINITY) {
-    return -INFINITY;
-  }
-  if (bdfi_isnan(x) || bdfi_isnan(y)) {
-    return bdfi_nan();
-  }
-  if (x == 0 && x == y) {
-    return bdfi_signbit(x) ? x : y;
-  }
-  return x < y ? x : y;
-}
-
 /* math.Mod: the C library's fmod is exact, and so the same; Go gives a NaN
  * where C leaves the sign of one to the platform. */
 double bdfi_mod(double x, double y) {

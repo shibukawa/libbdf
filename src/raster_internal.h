@@ -20,6 +20,9 @@
 #pragma fp_contract(off)
 #endif
 
+#include <math.h>
+#include <string.h>
+
 #include "bdf_internal.h"
 #include "image_internal.h"
 
@@ -36,9 +39,48 @@
 #define BDFI_3PI_4 2.3561944901923448  /* 0x4002d97c7f3321d2 */
 #define BDFI_SQRT2 1.4142135623730951  /* 0x3ff6a09e667f3bcd */
 
-BDF_INTERNAL int bdfi_isnan(double v);
-BDF_INTERNAL int bdfi_isinf(double v);
-BDF_INTERNAL int bdfi_signbit(double v);
+/* The helpers the inner loops of the rasterizer ask at every pixel or
+ * crossing are defined here, so that every file has them inline. */
+static inline int bdfi_isnan(double v) { return v != v; }
+static inline int bdfi_isinf(double v) { return v == INFINITY || v == -INFINITY; }
+static inline int bdfi_signbit(double v) {
+  uint64_t u;
+  memcpy(&u, &v, sizeof u);
+  return (int)(u >> 63);
+}
+/* Go's NaN: math.NaN(), the bits of which the reference's results carry. */
+static inline double bdfi_nan(void) {
+  uint64_t u = 0x7FF8000000000001ULL;
+  double v;
+  memcpy(&v, &u, sizeof v);
+  return v;
+}
+/* math.Max and math.Min: an infinity wins, then a NaN, and of two zeros the
+ * one of the sign asked for. */
+static inline double bdfi_fmax(double x, double y) {
+  if (x == INFINITY || y == INFINITY) {
+    return INFINITY;
+  }
+  if (bdfi_isnan(x) || bdfi_isnan(y)) {
+    return bdfi_nan();
+  }
+  if (x == 0 && x == y) {
+    return bdfi_signbit(x) ? y : x;
+  }
+  return x > y ? x : y;
+}
+static inline double bdfi_fmin(double x, double y) {
+  if (x == -INFINITY || y == -INFINITY) {
+    return -INFINITY;
+  }
+  if (bdfi_isnan(x) || bdfi_isnan(y)) {
+    return bdfi_nan();
+  }
+  if (x == 0 && x == y) {
+    return bdfi_signbit(x) ? x : y;
+  }
+  return x < y ? x : y;
+}
 BDF_INTERNAL void bdfi_sincos(double x, double *sn, double *cs);
 BDF_INTERNAL double bdfi_sin(double x);
 BDF_INTERNAL double bdfi_cos(double x);
@@ -48,13 +90,16 @@ BDF_INTERNAL double bdfi_atan2(double y, double x);
 BDF_INTERNAL double bdfi_asin(double x);
 BDF_INTERNAL double bdfi_acos(double x);
 BDF_INTERNAL double bdfi_hypot(double p, double q);
-BDF_INTERNAL double bdfi_fmax(double x, double y);
-BDF_INTERNAL double bdfi_fmin(double x, double y);
 BDF_INTERNAL double bdfi_mod(double x, double y);
 BDF_INTERNAL double bdfi_log2(double x);
 /* A double as an int the way the reference's processor converts it: what is
  * no number, or too large for 64 bits, is the smallest int. */
-BDF_INTERNAL int64_t bdfi_to_int(double v);
+static inline int64_t bdfi_to_int(double v) {
+  if (!(v > -9223372036854775808.0 && v < 9223372036854775808.0)) {
+    return INT64_MIN;
+  }
+  return (int64_t)v;
+}
 #ifndef BDF_IMPLEMENTATION
 /* a*b + c as the sources of the rasterizer compute it, for the tests of the
  * build: two operations, whatever the processor offers */
@@ -91,7 +136,12 @@ typedef struct bdfi_mat {
 BDF_INTERNAL bdfi_mat bdfi_mat_identity(void);
 /* m × n: n applies first. */
 BDF_INTERNAL bdfi_mat bdfi_mat_mul2(bdfi_mat m, bdfi_mat n);
-BDF_INTERNAL bdfi_pt bdfi_mat_pt(const bdfi_mat *m, double x, double y);
+static inline bdfi_pt bdfi_mat_pt(const bdfi_mat *m, double x, double y) {
+  bdfi_pt p;
+  p.x = m->v[0] * x + m->v[2] * y + m->v[4];
+  p.y = m->v[1] * x + m->v[3] * y + m->v[5];
+  return p;
+}
 BDF_INTERNAL bdfi_mat bdfi_mat_translate(bdfi_mat m, double x, double y);
 BDF_INTERNAL bdfi_mat bdfi_mat_scale(bdfi_mat m, double x, double y);
 BDF_INTERNAL double bdfi_mat_det(const bdfi_mat *m);
@@ -101,7 +151,19 @@ BDF_INTERNAL double bdfi_mat_area_scale(const bdfi_mat *m);
 BDF_INTERNAL int bdfi_mat_finite(const bdfi_mat *m);
 
 /* clampF: a coordinate in a range that converts to an int safely. */
-BDF_INTERNAL double bdfi_clampf(double v);
+static inline double bdfi_clampf(double v) {
+  const double lim = 16777216.0; /* 1 << 24 */
+  if (bdfi_isnan(v)) {
+    return 0;
+  }
+  if (v < -lim) {
+    return -lim;
+  }
+  if (v > lim) {
+    return lim;
+  }
+  return v;
+}
 
 /* ---- Paths --------------------------------------------------------------- */
 
@@ -181,6 +243,11 @@ typedef struct bdfi_scratch {
   size_t cap_active;
   bdfi_crossing *xs;
   size_t cap_xs;
+  /* room for sorting the edges and the crossings by merging */
+  bdfi_edge *edge_tmp;
+  size_t cap_edge_tmp;
+  bdfi_crossing *xs_tmp;
+  size_t cap_xs_tmp;
   float *area, *cover;
   size_t cap_area;
   /* the points of the paths flattened for a drawing, and their polylines */

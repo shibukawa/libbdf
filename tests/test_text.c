@@ -617,6 +617,37 @@ static void test_nesting(void) {
   free_objs(&deep);
 }
 
+/* More than 1024 states saved at a time are not kept, as the renderer keeps
+ * them (BDFI_MAX_STATES): the RESTOREs that match them restore nothing, and
+ * the ones below bring the state back. */
+static void test_saved_states(void) {
+  for (int beyond = 0; beyond <= 1; beyond++) {
+    size_t n = beyond ? 1024 + 30 : 30;
+    ob o = {0};
+    for (size_t i = 0; i < n; i++) {
+      ob_op(&o, BDF_OP_SAVE);
+    }
+    ob_translate(&o, 100, 0);
+    ob_text(&o, "moved", 0, 0, 5);
+    for (size_t i = 0; i < n; i++) {
+      ob_op(&o, BDF_OP_RESTORE);
+    }
+    ob_text(&o, "back", 0, 0, 4);
+    bdf_object *obj = ob_decode(&o);
+    bdf_text *t = NULL;
+    bdf_error err;
+    CHECK(bdf_text_extract(obj, NULL, NULL, &t, &err) == BDF_OK);
+    if (t) {
+      bdf_text_run r;
+      CHECK(bdf_text_run_count(t) == 2);
+      CHECK(bdf_text_run_at(t, 0, &r) == BDF_OK && r.x == 100);
+      CHECK(bdf_text_run_at(t, 1, &r) == BDF_OK && r.x == 0);
+      bdf_text_free(t);
+    }
+    bdf_object_free(obj);
+  }
+}
+
 static void test_masks_and_links(void) {
   ob c = {0};
   ob_text(&c, "child", 0, 0, 5);
@@ -1141,6 +1172,7 @@ int main(void) {
   extract_done();
   test_bad_references();
   test_nesting();
+  test_saved_states();
   test_masks_and_links();
   test_link_targets();
   test_text_index();
