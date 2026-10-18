@@ -510,10 +510,16 @@ static void bdfi_ghash(const bdfi_gcm *g, uint8_t y[16], const uint8_t *data, si
 int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad, size_t aad_len,
                   const uint8_t *ct, size_t ct_len, const uint8_t tag[16], uint8_t *out) {
   /* SP 800-38D section 5.2.1.1: no counter wrap or bit-length wrap. */
-  if ((uint64_t)ct_len > (UINT64_C(1) << 36) - 32 ||
-      (uint64_t)aad_len > UINT64_MAX / 8) {
+#if SIZE_MAX > ((UINT64_C(1) << 36) - 32)
+  if ((uint64_t)ct_len > (UINT64_C(1) << 36) - 32) {
     return -1;
   }
+#endif
+#if SIZE_MAX > (UINT64_MAX / 8)
+  if ((uint64_t)aad_len > UINT64_MAX / 8) {
+    return -1;
+  }
+#endif
   uint8_t counter[16], y[16] = {0}, lens[16], s[16];
   memcpy(counter, nonce, 12);
   counter[12] = counter[13] = counter[14] = 0;

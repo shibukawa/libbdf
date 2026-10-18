@@ -38,7 +38,7 @@ jobs:
           - { name: ubuntu-gcc, os: ubuntu-latest, cc: gcc }
           - { name: ubuntu-clang, os: ubuntu-latest, cc: clang }
           - { name: macos, os: macos-latest, cc: clang }
-          - { name: windows-msvc, os: windows-latest, cc: "" }
+          - { name: windows-msvc-x64, os: windows-latest, cc: "", cmake_args: "-A x64" }
     env:
       CC: ${{ matrix.cc }}
     steps:
@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_BUILD_TESTS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_BUILD_TESTS=ON ${{ matrix.cmake_args }}
       - name: Build
         run: cmake --build build --config Release
       - name: Test

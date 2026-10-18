@@ -6,6 +6,10 @@ project(bdf
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
 
+if(WIN32 AND CMAKE_SIZEOF_VOID_P LESS 8)
+  message(FATAL_ERROR "32-bit Windows is not supported; select a 64-bit target (for MSVC, -A x64)")
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -123,7 +127,14 @@ endif()
 target_compile_features(bdf PUBLIC c_std_11)
 # The rasterizer takes square roots and remainders: the math library, where
 # it is one of its own.
-find_library(BDF_LIBM m)
+include(CheckLibraryExists)
+# Probe through the compiler driver so -m32 and cross-toolchain flags
+# select the matching library rather than a host-architecture file.
+check_library_exists(m round "" BDF_HAS_LIBM)
+set(BDF_LIBM "")
+if(BDF_HAS_LIBM)
+  set(BDF_LIBM m)
+endif()
 set(BDF_PC_LIBS_PRIVATE "")
 if(BDF_LIBM)
   target_link_libraries(bdf PRIVATE ${BDF_LIBM})

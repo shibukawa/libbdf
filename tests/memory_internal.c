@@ -10,7 +10,13 @@
 #include <time.h>
 
 typedef union allocation {
+#ifdef _MSC_VER
+  /* MSVC's C headers omit max_align_t. Supported Windows targets are
+   * 64-bit, where the CRT malloc alignment is 16 bytes. */
+  unsigned char alignment[16];
+#else
   max_align_t alignment;
+#endif
   struct {
     size_t size;
   } value;

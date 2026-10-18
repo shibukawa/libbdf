@@ -37,7 +37,9 @@ ctest --test-dir build --output-on-failure
 cmake --install build --prefix /usr/local
 ```
 
-CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). The rasterizer needs the math library (`-lm`) where that is one of its own, and that its sources are not compiled with fused multiply-adds: it turns them off itself with the pragma of each compiler, and CMake adds `-ffp-contract=off`; do not build it with `-ffast-math`. Options:
+CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). Windows targets must be 64-bit; for Visual Studio, use `cmake -B build -A x64`. 32-bit Windows is not supported. The 32-bit Linux CI job remains for embedded use.
+
+The rasterizer needs the math library (`-lm`) where that is one of its own, and that its sources are not compiled with fused multiply-adds: it turns them off itself with the pragma of each compiler, and CMake adds `-ffp-contract=off`; do not build it with `-ffast-math`. Options:
 
 | Option | Default | Meaning |
 |---|---|---|
