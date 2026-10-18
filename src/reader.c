@@ -168,7 +168,7 @@ void *bdfi_alloc_items(size_t n, size_t size, int *oom) {
   if (n == 0) {
     return NULL;
   }
-  if (n > SIZE_MAX / size) {
+  if (size != 0 && n > (size_t)PTRDIFF_MAX / size) {
     *oom = 1;
     return NULL;
   }
@@ -213,7 +213,10 @@ struct bdfi_arena_chunk {
   /* the memory follows */
 };
 
-#define BDFI_ARENA_CHUNK (64 * 1024)
+#ifndef BDF_ARENA_CHUNK_SIZE
+#define BDF_ARENA_CHUNK_SIZE 4096
+#endif
+#define BDFI_ARENA_CHUNK BDF_ARENA_CHUNK_SIZE
 #define BDFI_ARENA_ALIGN 16
 
 void bdfi_arena_init(bdfi_arena *a) { a->chunks = NULL; }
@@ -246,6 +249,9 @@ void *bdfi_arena_alloc(bdfi_arena *a, size_t n) {
 }
 
 char *bdfi_arena_strdup(bdfi_arena *a, const char *s, size_t n) {
+  if (n == SIZE_MAX) {
+    return NULL;
+  }
   char *p = bdfi_arena_alloc(a, n + 1);
   if (!p) {
     return NULL;

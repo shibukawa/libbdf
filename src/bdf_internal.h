@@ -108,14 +108,16 @@ struct bdfi_pull {
 };
 
 /*
- * bdfi_inflate_pull inflates a raw deflate stream that starts at in->p +
+ * bdfi_inflate_sink inflates a raw deflate stream that starts at in->p +
  * in->pos and goes on through the stretches in gives. It takes no byte it
  * does not need and asks for a stretch only when it needs one, so that in
- * is left where the stream ends. The result is at most limit bytes, the
- * caller's to free.
+ * is left where the stream ends. At most limit bytes are passed to emit
+ * in stretches backed by a window of at most 32 KiB. emit must not alter
+ * or retain the bytes; -1 rejects the stream. No output is owned on return.
  */
-BDF_INTERNAL bdf_status bdfi_inflate_pull(bdfi_pull *in, size_t limit, uint8_t **out,
-                                          size_t *out_len);
+BDF_INTERNAL bdf_status bdfi_inflate_sink(bdfi_pull *in, size_t limit,
+                                          int (*emit)(void *, const uint8_t *, size_t),
+                                          void *ctx, size_t *out_len);
 
 /* bdfi_arena hands out memory that is freed all at once. */
 typedef struct bdfi_arena_chunk bdfi_arena_chunk;
@@ -275,7 +277,10 @@ typedef struct bdfi_json {
   uint32_t buf_n, buf_cap;
 } bdfi_json;
 
-#define BDFI_JSON_MAX_DEPTH 1024
+#ifndef BDF_MAX_JSON_DEPTH
+#define BDF_MAX_JSON_DEPTH 1024
+#endif
+#define BDFI_JSON_MAX_DEPTH BDF_MAX_JSON_DEPTH
 
 /* bdfi_json_parse parses one JSON value (and nothing after it) into *j,
  * which the caller zero-initialises and frees with bdfi_json_free. */
@@ -496,7 +501,6 @@ BDF_INTERNAL void bdfi_hkdf_sha256(const uint8_t *ikm, size_t ikm_len, const uin
 
 typedef struct bdfi_aes {
   uint8_t rk[240]; /* the 15 round keys of AES-256 */
-  uint8_t sbox[256], inv[256];
 } bdfi_aes;
 
 BDF_INTERNAL void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]);
@@ -511,8 +515,7 @@ BDF_INTERNAL int bdfi_aes_kw_unwrap(const uint8_t kek[32], const uint8_t *wrappe
 
 typedef struct bdfi_gcm {
   bdfi_aes aes;
-  uint64_t mh[16], ml[16]; /* the hash key times the polynomial of each nibble */
-  uint64_t red[16];        /* what four bits shifted out come back as */
+  uint64_t hi, lo; /* the GHASH key; no secret-indexed multiplication tables */
 } bdfi_gcm;
 
 BDF_INTERNAL void bdfi_gcm_init(bdfi_gcm *g, const uint8_t key[32]);

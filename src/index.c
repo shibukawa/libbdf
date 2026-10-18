@@ -325,7 +325,7 @@ static void bdfi_objcache_free(void *p) {
   if (!c) {
     return;
   }
-  for (size_t i = 0; i < c->n; i++) {
+  for (size_t i = 0; c->objs && i < c->n; i++) {
     bdf_object_free(c->objs[i]);
   }
   free(c->objs);

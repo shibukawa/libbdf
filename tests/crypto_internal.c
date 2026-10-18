@@ -139,6 +139,11 @@ static void test_gcm(void) {
   uint8_t out[1000], plain[1000], zero[1000];
   memset(zero, 0, sizeof zero);
   bdfi_gcm_init(g, cv_gcm_key);
+#if SIZE_MAX > UINT32_MAX
+  /* Reject before touching buffers, including before computing lengths in bits. */
+  CHECK(bdfi_gcm_open(g, NULL, NULL, 0, NULL, (UINT64_C(1) << 36) - 31, NULL, NULL) != 0);
+  CHECK(bdfi_gcm_open(g, NULL, NULL, (size_t)(UINT64_MAX / 8 + 1), NULL, 0, NULL, NULL) != 0);
+#endif
   size_t aad_off = 0;
   for (size_t i = 0; i < CV_GCM_CASES; i++) {
     size_t n = cv_gcm_lens[i], an = cv_gcm_aad_lens[i];
@@ -150,6 +155,14 @@ static void test_gcm(void) {
     memset(out, 0, sizeof out);
     CHECK(bdfi_gcm_open(g, cv_gcm_nonce, aad, an, ct, n, ct + n, out) == 0);
     CHECK(memcmp(out, plain, n) == 0);
+    /* The document decoder reuses the sealed allocation, whose plaintext
+     * starts twelve bytes before its ciphertext. */
+    uint8_t inplace[1028];
+    memcpy(inplace, cv_gcm_nonce, 12);
+    memcpy(inplace + 12, ct, n + 16);
+    CHECK(bdfi_gcm_open(g, inplace, aad, an, inplace + 12, n,
+                        inplace + 12 + n, inplace) == 0);
+    CHECK(memcmp(inplace, plain, n) == 0);
     /* a changed tag, ciphertext, nonce or additional data: refused, and
      * nothing written */
     uint8_t bad[1016];

@@ -7,9 +7,9 @@
  * against the reference implementation, which uses Go's standard library.
  * The scalar multiplication on P-256 is constant time (complete formulas,
  * one double and one add for every bit, selected without branches). AES
- * uses a table for its S-box and GHASH a table of sixteen multiples of the
- * key, as the readers of other document formats do: on a machine that runs
- * hostile code beside it, their timing may tell of the key.
+ * and GHASH use fixed-operation arithmetic instead of secret-indexed
+ * tables. This avoids cache-table leakage; machine-code timing and physical
+ * side channels still depend on the compiler and target hardware.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -273,28 +273,54 @@ void bdfi_hkdf_sha256(const uint8_t *ikm, size_t ikm_len, const uint8_t *salt, s
 
 /* ---- AES-256 (FIPS 197) ------------------------------------------------- */
 
-static uint8_t bdfi_rotl8(uint8_t x, int n) { return (uint8_t)((x << n) | (x >> (8 - n))); }
+#include "aes_ct_internal.h"
 
-static uint8_t bdfi_xtime(uint8_t x) { return (uint8_t)((x << 1) ^ ((x & 0x80) ? 0x1B : 0)); }
+static uint8_t bdfi_xtime(uint8_t x) {
+  return (uint8_t)((x << 1) ^ (0x1bu & (0u - (uint32_t)(x >> 7))));
+}
+
+static uint32_t bdfi_aes_rot4(uint32_t x, unsigned n) {
+  return ((x << n) & ((0xffu << n & 0xffu) * 0x01010101u)) |
+         ((x >> (8 - n)) & (((1u << n) - 1) * 0x01010101u));
+}
+
+/* The inverse affine map of FIPS 197, applied independently to four bytes. */
+static uint32_t bdfi_aes_unaffine4(uint32_t x) {
+  return bdfi_aes_rot4(x, 1) ^ bdfi_aes_rot4(x, 3) ^ bdfi_aes_rot4(x, 6) ^ 0x05050505u;
+}
+
+static uint32_t bdfi_aes_sub4(uint32_t x) {
+  uint32_t q[8];
+  for (int i = 0; i < 8; i++) {
+    q[i] = x;
+  }
+  bdfi_aes_ortho(q);
+  bdfi_aes_sbox_bitslice(q);
+  bdfi_aes_ortho(q);
+  uint32_t out = q[0];
+  bdfi_wipe(q, sizeof q);
+  return out;
+}
+
+/* All sixteen bytes share one Boolean S-box circuit. For the inverse,
+ * undo the affine map before and after the forward circuit. The S-box
+ * and transposes have no secret-indexed loads or conditional branches. */
+static void bdfi_aes_sub_bytes(uint8_t s[16], int inverse) {
+  uint32_t q[8] = {0};
+  for (int i = 0; i < 4; i++) {
+    uint32_t x = bdfi_load32be(s + 4 * i);
+    q[i] = inverse ? bdfi_aes_unaffine4(x) : x;
+  }
+  bdfi_aes_ortho(q);
+  bdfi_aes_sbox_bitslice(q);
+  bdfi_aes_ortho(q);
+  for (int i = 0; i < 4; i++) {
+    bdfi_store32be(s + 4 * i, inverse ? bdfi_aes_unaffine4(q[i]) : q[i]);
+  }
+  bdfi_wipe(q, sizeof q);
+}
 
 void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]) {
-  /* the S-box, from its definition: the inverse in GF(2^8) and an affine map */
-  uint8_t p = 1, q = 1;
-  do {
-    p = (uint8_t)(p ^ bdfi_xtime(p)); /* p × 3 */
-    q ^= (uint8_t)(q << 1);           /* q ÷ 3 */
-    q ^= (uint8_t)(q << 2);
-    q ^= (uint8_t)(q << 4);
-    if (q & 0x80) {
-      q ^= 0x09;
-    }
-    uint8_t x = (uint8_t)(q ^ bdfi_rotl8(q, 1) ^ bdfi_rotl8(q, 2) ^ bdfi_rotl8(q, 3) ^ bdfi_rotl8(q, 4));
-    a->sbox[p] = (uint8_t)(x ^ 0x63);
-  } while (p != 1);
-  a->sbox[0] = 0x63;
-  for (int i = 0; i < 256; i++) {
-    a->inv[a->sbox[i]] = (uint8_t)i;
-  }
   /* the key schedule: 15 round keys */
   memcpy(a->rk, key, 32);
   uint8_t rcon = 1;
@@ -302,16 +328,12 @@ void bdfi_aes256_init(bdfi_aes *a, const uint8_t key[32]) {
     uint8_t t[4];
     memcpy(t, a->rk + i - 4, 4);
     if (i % 32 == 0) {
-      uint8_t t0 = t[0];
-      t[0] = (uint8_t)(a->sbox[t[1]] ^ rcon);
-      t[1] = a->sbox[t[2]];
-      t[2] = a->sbox[t[3]];
-      t[3] = a->sbox[t0];
+      uint32_t v = bdfi_load32be(t);
+      bdfi_store32be(t, bdfi_aes_sub4((v << 8) | (v >> 24)));
+      t[0] ^= rcon;
       rcon = bdfi_xtime(rcon);
     } else if (i % 32 == 16) {
-      for (int k = 0; k < 4; k++) {
-        t[k] = a->sbox[t[k]];
-      }
+      bdfi_store32be(t, bdfi_aes_sub4(bdfi_load32be(t)));
     }
     for (int k = 0; k < 4; k++) {
       a->rk[i + k] = (uint8_t)(a->rk[i - 32 + k] ^ t[k]);
@@ -333,9 +355,10 @@ void bdfi_aes256_encrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16
     /* SubBytes and ShiftRows: row r of the state moves r columns to the left */
     for (int c = 0; c < 4; c++) {
       for (int r = 0; r < 4; r++) {
-        t[4 * c + r] = a->sbox[s[4 * ((c + r) & 3) + r]];
+        t[4 * c + r] = s[4 * ((c + r) & 3) + r];
       }
     }
+    bdfi_aes_sub_bytes(t, 0);
     if (round < 14) {
       for (int c = 0; c < 4; c++) {
         uint8_t *col = t + 4 * c;
@@ -359,9 +382,7 @@ void bdfi_aes256_encrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16
 static uint8_t bdfi_gmul(uint8_t x, uint8_t y) {
   uint8_t r = 0;
   for (int i = 0; i < 8; i++) {
-    if (y & 1) {
-      r ^= x;
-    }
+    r ^= (uint8_t)(x & (0u - (uint32_t)(y & 1)));
     x = bdfi_xtime(x);
     y >>= 1;
   }
@@ -373,10 +394,11 @@ void bdfi_aes256_decrypt(const bdfi_aes *a, const uint8_t in[16], uint8_t out[16
   memcpy(s, in, 16);
   bdfi_aes_add_key(s, a->rk + 16 * 14);
   for (int round = 13; round >= 0; round--) {
-    /* InvShiftRows and InvSubBytes: row r moves r columns to the right */
+    bdfi_aes_sub_bytes(s, 1);
+    /* InvShiftRows: row r moves r columns to the right. */
     for (int c = 0; c < 4; c++) {
       for (int r = 0; r < 4; r++) {
-        t[4 * ((c + r) & 3) + r] = a->inv[s[4 * c + r]];
+        t[4 * ((c + r) & 3) + r] = s[4 * c + r];
       }
     }
     bdfi_aes_add_key(t, a->rk + 16 * round);
@@ -442,66 +464,36 @@ int bdfi_aes_kw_unwrap(const uint8_t kek[32], const uint8_t *wrapped, size_t len
  * multiplying by x is a shift to the right, and what falls off the end of lo
  * comes back as the reduction polynomial at the top of hi.
  */
-static void bdfi_gcm_times_x(uint64_t *hi, uint64_t *lo) {
-  uint64_t carry = *lo & 1;
-  *lo = (*hi << 63) | (*lo >> 1);
-  *hi = (*hi >> 1) ^ (carry ? 0xE100000000000000ULL : 0);
-}
-
 void bdfi_gcm_init(bdfi_gcm *g, const uint8_t key[32]) {
   uint8_t h[16] = {0};
   bdfi_aes256_init(&g->aes, key);
   bdfi_aes256_encrypt(&g->aes, h, h);
-  /* the multiples of the hash key by the sixteen polynomials of a nibble:
-   * the top bit of a nibble is its lowest power */
-  uint64_t hi = ((uint64_t)bdfi_load32be(h) << 32) | bdfi_load32be(h + 4);
-  uint64_t lo = ((uint64_t)bdfi_load32be(h + 8) << 32) | bdfi_load32be(h + 12);
-  memset(g->mh, 0, sizeof g->mh);
-  memset(g->ml, 0, sizeof g->ml);
-  for (int bit = 8; bit > 0; bit >>= 1) {
-    g->mh[bit] = hi;
-    g->ml[bit] = lo;
-    bdfi_gcm_times_x(&hi, &lo);
-  }
-  for (int i = 2; i < 16; i <<= 1) {
-    for (int j = 1; j < i; j++) {
-      g->mh[i + j] = g->mh[i] ^ g->mh[j];
-      g->ml[i + j] = g->ml[i] ^ g->ml[j];
-    }
-  }
-  /* what the four bits that fall off in a multiplication by x^4 come back as */
-  for (int r = 0; r < 16; r++) {
-    uint64_t rh = 0, rl = (uint64_t)r;
-    for (int k = 0; k < 4; k++) {
-      bdfi_gcm_times_x(&rh, &rl);
-    }
-    g->red[r] = rh;
-  }
+  g->hi = ((uint64_t)bdfi_load32be(h) << 32) | bdfi_load32be(h + 4);
+  g->lo = ((uint64_t)bdfi_load32be(h + 8) << 32) | bdfi_load32be(h + 12);
   bdfi_wipe(h, sizeof h);
 }
 
-/* bdfi_ghash_block folds a block into the hash: y = (y ⊕ block) × H. */
+/* SP 800-38D, Algorithm 1: fixed 128 steps with masked additions. */
 static void bdfi_ghash_block(const bdfi_gcm *g, uint8_t y[16], const uint8_t *block, size_t len) {
   uint8_t x[16];
   memcpy(x, y, 16);
   for (size_t i = 0; i < len; i++) {
     x[i] ^= block[i];
   }
-  uint64_t zh = 0, zl = 0;
-  /* Horner's rule in x^4, from the highest powers: the low nibble of the
-   * last byte first */
-  for (int i = 15; i >= 0; i--) {
-    for (int half = 0; half < 2; half++) {
-      unsigned nibble = half == 0 ? (x[i] & 15u) : (unsigned)(x[i] >> 4);
-      unsigned rem = (unsigned)(zl & 15);
-      zl = (zh << 60) | (zl >> 4);
-      zh = (zh >> 4) ^ g->red[rem];
-      zh ^= g->mh[nibble];
-      zl ^= g->ml[nibble];
+  uint64_t zh = 0, zl = 0, hi = g->hi, lo = g->lo;
+  for (int i = 0; i < 16; i++) {
+    for (int bit = 7; bit >= 0; bit--) {
+      uint64_t mask = (uint64_t)0 - ((x[i] >> bit) & 1u);
+      zh ^= hi & mask;
+      zl ^= lo & mask;
+      uint64_t carry = (uint64_t)0 - (lo & 1u);
+      lo = (hi << 63) | (lo >> 1);
+      hi = (hi >> 1) ^ (carry & 0xe100000000000000ULL);
     }
   }
   bdfi_store64be(y, zh);
   bdfi_store64be(y + 8, zl);
+  bdfi_wipe(x, sizeof x);
 }
 
 static void bdfi_ghash(const bdfi_gcm *g, uint8_t y[16], const uint8_t *data, size_t len) {
@@ -517,6 +509,11 @@ static void bdfi_ghash(const bdfi_gcm *g, uint8_t y[16], const uint8_t *data, si
 
 int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad, size_t aad_len,
                   const uint8_t *ct, size_t ct_len, const uint8_t tag[16], uint8_t *out) {
+  /* SP 800-38D section 5.2.1.1: no counter wrap or bit-length wrap. */
+  if ((uint64_t)ct_len > (UINT64_C(1) << 36) - 32 ||
+      (uint64_t)aad_len > UINT64_MAX / 8) {
+    return -1;
+  }
   uint8_t counter[16], y[16] = {0}, lens[16], s[16];
   memcpy(counter, nonce, 12);
   counter[12] = counter[13] = counter[14] = 0;
@@ -532,10 +529,12 @@ int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad
     s[i] ^= y[i];
   }
   if (!bdfi_equal(s, tag, 16)) {
+    bdfi_wipe(s, sizeof s);
+    bdfi_wipe(y, sizeof y);
     return -1;
   }
   uint32_t n = 1;
-  for (size_t off = 0; off < ct_len; off += 16) {
+  for (size_t off = 0; off < ct_len;) {
     n++;
     bdfi_store32be(counter + 12, n);
     bdfi_aes256_encrypt(&g->aes, counter, s);
@@ -543,6 +542,7 @@ int bdfi_gcm_open(const bdfi_gcm *g, const uint8_t nonce[12], const uint8_t *aad
     for (size_t i = 0; i < take; i++) {
       out[off + i] = (uint8_t)(ct[off + i] ^ s[i]);
     }
+    off += take;
   }
   bdfi_wipe(s, sizeof s);
   return 0;

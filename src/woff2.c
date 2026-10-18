@@ -14,7 +14,10 @@
 #include "bdf_internal.h"
 
 /* The tables of a font, decompressed, are at most this large together. */
-#define BDFI_WOFF2_MAX_SIZE ((size_t)256 << 20)
+#ifndef BDF_MAX_WOFF2_SIZE
+#define BDF_MAX_WOFF2_SIZE ((size_t)256 << 20)
+#endif
+#define BDFI_WOFF2_MAX_SIZE BDF_MAX_WOFF2_SIZE
 
 /* The known table tags of WOFF2; a tag's index is its flag value. */
 static const char *const bdfi_woff2_known_tags[63] = {
@@ -48,15 +51,15 @@ static void bdfi_put16(uint8_t *p, uint16_t v) {
 typedef struct bdfi_wbuf {
   uint8_t *b;
   size_t n, cap;
-  int oom;
+  int oom, limited;
 } bdfi_wbuf;
 
 static int bdfi_wbuf_reserve(bdfi_wbuf *w, size_t extra) {
-  if (w->oom) {
+  if (w->oom || w->limited) {
     return -1;
   }
-  if (extra > SIZE_MAX - w->n) {
-    w->oom = 1;
+  if (extra > BDFI_WOFF2_MAX_SIZE - w->n) {
+    w->limited = 1;
     return -1;
   }
   if (w->n + extra <= w->cap) {
@@ -69,6 +72,9 @@ static int bdfi_wbuf_reserve(bdfi_wbuf *w, size_t extra) {
       break;
     }
     cap *= 2;
+  }
+  if (cap > BDFI_WOFF2_MAX_SIZE) {
+    cap = BDFI_WOFF2_MAX_SIZE;
   }
   uint8_t *b = realloc(w->b, cap);
   if (!b) {
@@ -215,16 +221,43 @@ static void bdfi_triplet(unsigned flag, bdfi_ws *s, int *dx, int *dy) {
 
 /* The working memory of one simple glyph: at most 65535 points. */
 typedef struct bdfi_glyph_scratch {
-  int32_t *ends, *xs, *ys;
+  uint16_t *ends;
+  int32_t *xs, *ys;
   uint8_t *on;
+  size_t contours, points;
 } bdfi_glyph_scratch;
 
-static int bdfi_glyph_scratch_init(bdfi_glyph_scratch *g) {
-  g->ends = malloc(32768 * sizeof *g->ends);
-  g->xs = malloc(65536 * sizeof *g->xs);
-  g->ys = malloc(65536 * sizeof *g->ys);
-  g->on = malloc(65536);
-  return g->ends && g->xs && g->ys && g->on ? 0 : -1;
+/* Reuse only as much scratch as the largest glyph so far needs. A font
+ * containing empty or composite glyphs needs none. On failure, every
+ * successful allocation remains owned by g. */
+static int bdfi_glyph_scratch_reserve(bdfi_glyph_scratch *g, size_t contours, size_t points) {
+  if (contours > g->contours) {
+    uint16_t *p = bdfi_realloc_array(g->ends, contours, sizeof *p);
+    if (!p) {
+      return -1;
+    }
+    g->ends = p;
+    g->contours = contours;
+  }
+  if (points > g->points) {
+    int32_t *p = bdfi_realloc_array(g->xs, points, sizeof *p);
+    if (!p) {
+      return -1;
+    }
+    g->xs = p;
+    p = bdfi_realloc_array(g->ys, points, sizeof *p);
+    if (!p) {
+      return -1;
+    }
+    g->ys = p;
+    uint8_t *on = bdfi_realloc_array(g->on, points, sizeof *on);
+    if (!on) {
+      return -1;
+    }
+    g->on = on;
+    g->points = points;
+  }
+  return 0;
 }
 
 static void bdfi_glyph_scratch_free(bdfi_glyph_scratch *g) {
@@ -278,7 +311,7 @@ bdf_status bdfi_woff2_rebuild_glyf(const uint8_t *t, size_t n, uint8_t **glyf_ou
   bdfi_wbuf glyf = {0};
   uint8_t *loca = malloc((num_glyphs + 1) * 4);
   bdfi_glyph_scratch sc = {0};
-  if (!loca || bdfi_glyph_scratch_init(&sc) < 0) {
+  if (!loca) {
     st = BDF_ERR_NOMEM;
     goto done;
   }
@@ -330,12 +363,26 @@ bdf_status bdfi_woff2_rebuild_glyf(const uint8_t *t, size_t n, uint8_t **glyf_ou
       }
     } else {
       /* a simple glyph: contours, points, instructions */
+      if ((size_t)nc > n_points->n - n_points->pos) {
+        goto done;
+      }
+      if (bdfi_glyph_scratch_reserve(&sc, (size_t)nc, 0) < 0) {
+        st = BDF_ERR_NOMEM;
+        goto done;
+      }
       size_t total = 0;
       for (int i = 0; i < nc; i++) {
         total += bdfi_ws_u255(n_points);
-        sc.ends[i] = (int32_t)total - 1;
+        if (total > 0xffff || n_points->err) {
+          goto done;
+        }
+        sc.ends[i] = (uint16_t)(total - 1);
       }
-      if (total > 0xffff) {
+      if (total > flag_s->n - flag_s->pos) {
+        goto done;
+      }
+      if (bdfi_glyph_scratch_reserve(&sc, (size_t)nc, total) < 0) {
+        st = BDF_ERR_NOMEM;
         goto done;
       }
       int x = 0, y = 0;
@@ -344,8 +391,13 @@ bdf_status bdfi_woff2_rebuild_glyf(const uint8_t *t, size_t n, uint8_t **glyf_ou
         sc.on[i] = (f & 0x80) == 0;
         int dx, dy;
         bdfi_triplet(f & 0x7f, glyph_s, &dx, &dy);
-        x += dx;
-        y += dy;
+        int64_t nx = (int64_t)x + dx, ny = (int64_t)y + dy;
+        if (nx < INT32_MIN || nx > INT32_MAX || ny < INT32_MIN || ny > INT32_MAX ||
+            glyph_s->err) {
+          goto done;
+        }
+        x = (int32_t)nx;
+        y = (int32_t)ny;
         sc.xs[i] = x;
         sc.ys[i] = y;
       }
@@ -408,11 +460,13 @@ bdf_status bdfi_woff2_rebuild_glyf(const uint8_t *t, size_t n, uint8_t **glyf_ou
         py = sc.ys[i];
       }
     }
-    while (glyf.n % 4 != 0) {
-      bdfi_wbuf_u8(&glyf, 0);
-    }
+    static const uint8_t padding[3] = {0};
+    bdfi_wbuf_bytes(&glyf, padding, (4 - glyf.n % 4) % 4);
     if (glyf.oom) {
       st = BDF_ERR_NOMEM;
+      goto done;
+    }
+    if (glyf.limited) {
       goto done;
     }
     /* a stream that ended reads as zeros: stop at the glyph that read past
@@ -596,7 +650,7 @@ static bdf_status bdfi_build_sfnt(uint32_t flavor, bdfi_w2_tables *ts, uint8_t *
     }
     total += padded;
   }
-  if (total > UINT32_MAX) {
+  if (total > UINT32_MAX || total > BDFI_WOFF2_MAX_SIZE) {
     return BDF_ERR_FORMAT; /* offsets are 32-bit */
   }
   uint8_t *o = calloc(total, 1);

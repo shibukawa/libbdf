@@ -30,6 +30,7 @@ file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/debug/include")
 vcpkg_install_copyright(FILE_LIST
   "${SOURCE_PATH}/LICENSE"
   "${SOURCE_PATH}/third_party/brotli/LICENSE"
+  "${SOURCE_PATH}/third_party/bearssl/LICENSE"
   "${SOURCE_PATH}/third_party/go-math/LICENSE"
   "${SOURCE_PATH}/third_party/go-image/LICENSE"
   "${SOURCE_PATH}/third_party/go-text/LICENSE"

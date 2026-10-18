@@ -538,8 +538,8 @@ static void bdfi_png_row(const bdfi_png *d, const uint8_t *cdat, int32_t w, uint
   }
 }
 
-static uint32_t bdfi_png_adler32(const uint8_t *p, size_t n) {
-  uint32_t a = 1, b = 0;
+static uint32_t bdfi_png_adler32(uint32_t sum, const uint8_t *p, size_t n) {
+  uint32_t a = sum & 0xffff, b = sum >> 16;
   while (n > 0) {
     size_t run = n < 5552 ? n : 5552; /* the most bytes the sums hold before a remainder */
     for (size_t i = 0; i < run; i++) {
@@ -552,6 +552,70 @@ static uint32_t bdfi_png_adler32(const uint8_t *p, size_t n) {
     n -= run;
   }
   return b << 16 | a;
+}
+
+/* Consume filtered rows as they leave the deflate window. The window
+ * retains the original bytes for back-references; only these two rows
+ * are unfiltered. Adam7 passes reuse the same buffers. */
+typedef struct bdfi_png_rows {
+  bdfi_png *d;
+  uint8_t *pix, *row, *before;
+  size_t have, row_size, bpp;
+  int pass, passes;
+  int32_t w, h, y;
+  const uint8_t *at;
+  uint32_t sum;
+} bdfi_png_rows;
+
+static void bdfi_png_next_pass(bdfi_png_rows *s) {
+  s->row_size = 0;
+  while (s->pass < s->passes) {
+    bdfi_png_pass(s->d, s->pass, &s->w, &s->h, &s->at);
+    if (s->w > 0 && s->h > 0) {
+      s->row_size = bdfi_png_row_size(s->d, s->w);
+      memset(s->before, 0, s->row_size);
+      s->y = 0;
+      return;
+    }
+    s->pass++;
+  }
+}
+
+static int bdfi_png_emit(void *ctx, const uint8_t *p, size_t n) {
+  bdfi_png_rows *s = ctx;
+  s->sum = bdfi_png_adler32(s->sum, p, n);
+  while (n) {
+    if (!s->row_size) {
+      return -1;
+    }
+    size_t take = s->row_size - s->have;
+    if (take > n) {
+      take = n;
+    }
+    memcpy(s->row + s->have, p, take);
+    s->have += take;
+    p += take;
+    n -= take;
+    if (s->have != s->row_size) {
+      continue;
+    }
+    if (!bdfi_png_unfilter(s->row[0], s->row + 1, s->before + 1,
+                            s->row_size - 1, s->bpp)) {
+      return -1;
+    }
+    uint8_t *o = s->pix + 4 * (((size_t)s->y * s->at[1] + s->at[3]) *
+                                (size_t)s->d->width + s->at[2]);
+    bdfi_png_row(s->d, s->row + 1, s->w, o, 4 * (size_t)s->at[0]);
+    uint8_t *swap = s->before;
+    s->before = s->row;
+    s->row = swap;
+    s->have = 0;
+    if (++s->y == s->h) {
+      s->pass++;
+      bdfi_png_next_pass(s);
+    }
+  }
+  return 0;
 }
 
 /*
@@ -574,7 +638,12 @@ static int bdfi_png_idat(bdfi_png *d, uint32_t length) {
     const uint8_t *at;
     bdfi_png_pass(d, pass, &w, &h, &at);
     if (w > 0) {
-      total += bdfi_png_row_size(d, w) * (size_t)h;
+      size_t row_size = bdfi_png_row_size(d, w);
+      if ((size_t)h > (SIZE_MAX - total) / row_size) {
+        d->status = BDF_ERR_TOO_LARGE;
+        return 0;
+      }
+      total += row_size * (size_t)h;
     }
   }
 
@@ -601,15 +670,36 @@ static int bdfi_png_idat(bdfi_png *d, uint32_t length) {
       return 0;
     }
   }
-  uint8_t *raw = NULL;
+  size_t width = (size_t)d->width, height = (size_t)d->height;
+  size_t row_size = bdfi_png_row_size(d, d->width);
+  uint8_t *pix = bdfi_malloc_array(width * height, 4);
+  uint8_t *rows = bdfi_calloc_array(row_size, 2);
+  if (!pix || !rows) {
+    free(pix);
+    free(rows);
+    d->status = BDF_ERR_NOMEM;
+    return 0;
+  }
+  bdfi_png_rows sink;
+  memset(&sink, 0, sizeof sink);
+  sink.d = d;
+  sink.pix = pix;
+  sink.row = rows;
+  sink.before = rows + row_size;
+  sink.bpp = (size_t)(bdfi_png_bits_per_pixel(d) + 7) / 8;
+  sink.passes = passes;
+  sink.sum = 1;
+  bdfi_png_next_pass(&sink);
   size_t raw_len = 0;
-  bdf_status st = bdfi_inflate_pull(&in, total, &raw, &raw_len);
+  bdf_status st = bdfi_inflate_sink(&in, total, bdfi_png_emit, &sink, &raw_len);
+  free(rows);
   if (st != BDF_OK) {
+    free(pix);
     d->status = st == BDF_ERR_NOMEM ? st : BDF_ERR_FORMAT;
     return 0;
   }
   uint32_t sum = 0;
-  int ok = raw_len == total;
+  int ok = raw_len == total && sink.pass == passes && sink.have == 0;
   for (int i = 0; ok && i < 4; i++) {
     int b = bdfi_png_pull_byte(&in);
     ok = b >= 0;
@@ -617,46 +707,7 @@ static int bdfi_png_idat(bdfi_png *d, uint32_t length) {
   }
   /* nothing of the chunk the data ends in may be left unread: the
    * reference's "too much pixel data" */
-  ok = ok && sum == bdfi_png_adler32(raw, raw_len) && d->idat_length == 0;
-  if (!ok) {
-    free(raw);
-    return 0;
-  }
-
-  size_t width = (size_t)d->width, height = (size_t)d->height;
-  size_t bpp = (size_t)(bdfi_png_bits_per_pixel(d) + 7) / 8;
-  uint8_t *pix = bdfi_malloc_array(width * height, 4);
-  uint8_t *zero = calloc(1, bdfi_png_row_size(d, d->width));
-  if (!pix || !zero) {
-    free(pix);
-    free(zero);
-    free(raw);
-    d->status = BDF_ERR_NOMEM;
-    return 0;
-  }
-  uint8_t *row = raw;
-  for (int pass = 0; ok && pass < passes; pass++) {
-    int32_t w, h;
-    const uint8_t *at;
-    bdfi_png_pass(d, pass, &w, &h, &at);
-    if (w == 0) {
-      continue;
-    }
-    size_t n = bdfi_png_row_size(d, w) - 1;
-    const uint8_t *before = zero;
-    for (int32_t y = 0; y < h; y++) {
-      if (!bdfi_png_unfilter(row[0], row + 1, before, n, bpp)) {
-        ok = 0;
-        break;
-      }
-      uint8_t *o = pix + 4 * (((size_t)y * at[1] + at[3]) * width + at[2]);
-      bdfi_png_row(d, row + 1, w, o, 4 * (size_t)at[0]);
-      before = row + 1;
-      row += n + 1;
-    }
-  }
-  free(zero);
-  free(raw);
+  ok = ok && sum == sink.sum && d->idat_length == 0;
   if (!ok) {
     free(pix);
     return 0;

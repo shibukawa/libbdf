@@ -33,7 +33,7 @@ static uint32_t bdfi_jp_node(bdfi_jp *p, uint32_t kind) {
       return UINT32_MAX;
     }
     uint32_t cap = j->cap ? j->cap * 2 : 64;
-    bdfi_json_node *nodes = realloc(j->nodes, (size_t)cap * sizeof *nodes);
+    bdfi_json_node *nodes = bdfi_realloc_array(j->nodes, cap, sizeof *nodes);
     if (!nodes) {
       p->oom = 1;
       return UINT32_MAX;
