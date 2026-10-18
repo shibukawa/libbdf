@@ -63,7 +63,7 @@ typedef enum bdf_status {
   BDF_ERR_UNSUPPORTED = 4, /* well-formed, but beyond this build or this library: a WOFF2 font
                               without a Brotli decoder, a font collection, a WOFF 1.0 font */
   BDF_ERR_PASSWORD = 5,    /* the password, or the key, does not open the document */
-  BDF_ERR_TOO_LARGE = 6    /* an image of more pixels than a renderer draws: ask for a smaller one */
+  BDF_ERR_TOO_LARGE = 6    /* input or output exceeds a configured resource limit */
 } bdf_status;
 
 /*
@@ -82,9 +82,17 @@ typedef struct bdf_error {
  * (bdf_inflate, bdf_doc_part). */
 BDF_API void bdf_free(void *p);
 
-/* ---- Limits of the format (spec §3.2, §4) ------------------------------- */
+/* ---- Format and resource limits (spec §3.2, §4) ------------------------- */
 
+#ifndef BDF_MAX_MANIFEST_SIZE
 #define BDF_MAX_MANIFEST_SIZE (256u << 20) /* a manifest is at most 256 MiB */
+#endif
+/* Resource policy: bounds both stored and decoded parts. Builds for small
+ * devices may lower this and the manifest/render limits. These are per
+ * buffer limits, not a bound on the process's total heap. */
+#ifndef BDF_MAX_PART_SIZE
+#define BDF_MAX_PART_SIZE (256u << 20)
+#endif
 #define BDF_MAX_PAGE_SIZE     (1 << 24)    /* page sides and bodies, in units */
 #define BDF_MAX_SHEET_ENTRIES (1 << 24)    /* rows, and columns, of a sheet */
 #define BDF_MIN_ENTRY_SIZE    (1.0 / 64)   /* the smallest row or column that is not hidden */
@@ -1063,7 +1071,9 @@ BDF_API void bdf_image_free(bdf_image *image);
 
 /* The most pixels of an image a renderer draws (a canvas takes 16 bytes a
  * pixel while it is drawn): a larger one is BDF_ERR_TOO_LARGE. */
+#ifndef BDF_MAX_RENDER_PIXELS
 #define BDF_MAX_RENDER_PIXELS (64 << 20)
+#endif
 
 /* bdf_render_page draws a whole page of a fixed or flow view (or a strip of
  * a scroll view) at scale device pixels per unit. The units of a page are

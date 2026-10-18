@@ -16,6 +16,18 @@ permissions:
   contents: read
 
 jobs:
+  # Exercise size_t arithmetic and the fault-injection suite on 32-bit libc.
+  # SSE2 keeps float/double evaluation at the reference's precision;
+  # x87 extended intermediates change a few of the pixel-exact comparisons.
+  build-32bit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-multilib
+      - run: cmake -B build -DCMAKE_C_FLAGS="-m32 -msse2 -mfpmath=sse" -DCMAKE_EXE_LINKER_FLAGS=-m32 -DBDF_WERROR=ON -DBDF_SANITIZE=address,undefined
+      - run: cmake --build build --parallel 4
+      - run: ctest --test-dir build --output-on-failure --parallel 2
+
   # Build and the unit tests on every platform the library is meant for,
   # against the sources and against the single-header form.
   build:
@@ -28,7 +40,7 @@ jobs:
           - { name: ubuntu-gcc, os: ubuntu-latest, cc: gcc }
           - { name: ubuntu-clang, os: ubuntu-latest, cc: clang }
           - { name: macos, os: macos-latest, cc: clang }
-          - { name: windows-msvc, os: windows-latest, cc: "" }
+          - { name: windows-msvc-x64, os: windows-latest, cc: "", cmake_args: "-A x64" }
     env:
       CC: ${{ matrix.cc }}
     steps:
@@ -37,7 +49,7 @@ jobs:
         with:
           python-version: "3.x"
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_BUILD_TESTS=ON
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DBDF_WERROR=ON -DBDF_BUILD_TESTS=ON ${{ matrix.cmake_args }}
       - name: Build
         run: cmake --build build --config Release
       - name: Test

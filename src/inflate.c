@@ -24,6 +24,9 @@ typedef struct bdfi_inf {
   bdfi_pull *pull; /* where more input comes from, for a stream in stretches */
   uint8_t *out;
   size_t out_len, out_cap, limit;
+  size_t out_mask; /* SIZE_MAX for contiguous output, window size - 1 for a sink */
+  int (*emit)(void *, const uint8_t *, size_t);
+  void *emit_ctx;
   const char *err; /* the first failure */
 } bdfi_inf;
 
@@ -74,15 +77,21 @@ static int bdfi_inf_bits(bdfi_inf *s, int need) {
   return (int)(val & ((1u << need) - 1));
 }
 
-/* bdfi_inf_put appends a byte, within the limit. */
-static int bdfi_inf_put(bdfi_inf *s, uint8_t b) {
-  if (s->out_len == s->limit) {
+static int bdfi_inf_reserve(bdfi_inf *s, size_t n) {
+  if (n > s->limit - s->out_len) {
     return bdfi_inf_fail(s, "data inflates to more than its stated size");
   }
-  if (s->out_len == s->out_cap) {
-    size_t cap = s->out_cap ? s->out_cap * 2 : 1024;
-    if (cap > s->limit) {
+  if (!s->emit && s->out_len + n > s->out_cap) {
+    size_t need = s->out_len + n;
+    size_t cap = s->out_cap ? s->out_cap : 1024;
+    while (cap < need && cap <= s->limit / 2) {
+      cap *= 2;
+    }
+    if (cap < need || cap > s->limit) {
       cap = s->limit;
+    }
+    if (cap > (size_t)PTRDIFF_MAX) {
+      return bdfi_inf_fail(s, "out of memory");
     }
     uint8_t *p = realloc(s->out, cap);
     if (!p) {
@@ -91,7 +100,42 @@ static int bdfi_inf_put(bdfi_inf *s, uint8_t b) {
     s->out = p;
     s->out_cap = cap;
   }
-  s->out[s->out_len++] = b;
+  return 0;
+}
+
+/* Append to the output or the sliding window, after reserving space. */
+static int bdfi_inf_write(bdfi_inf *s, uint8_t b) {
+  s->out[s->out_len++ & s->out_mask] = b;
+  if (s->emit && (s->out_len & s->out_mask) == 0 &&
+      s->emit(s->emit_ctx, s->out, s->out_cap) < 0) {
+    return bdfi_inf_fail(s, "invalid inflated data");
+  }
+  return 0;
+}
+
+static int bdfi_inf_put(bdfi_inf *s, uint8_t b) {
+  return bdfi_inf_reserve(s, 1) < 0 ? -1 : bdfi_inf_write(s, b);
+}
+
+static int bdfi_inf_bytes(bdfi_inf *s, const uint8_t *p, size_t n) {
+  if (bdfi_inf_reserve(s, n) < 0) {
+    return -1;
+  }
+  while (n) {
+    size_t at = s->out_len & s->out_mask;
+    size_t take = s->out_cap - at;
+    if (take > n) {
+      take = n;
+    }
+    memcpy(s->out + at, p, take);
+    s->out_len += take;
+    p += take;
+    n -= take;
+    if (s->emit && (s->out_len & s->out_mask) == 0 &&
+        s->emit(s->emit_ctx, s->out, s->out_cap) < 0) {
+      return bdfi_inf_fail(s, "invalid inflated data");
+    }
+  }
   return 0;
 }
 
@@ -209,8 +253,11 @@ static int bdfi_inf_codes(bdfi_inf *s, const bdfi_huff *lencode, const bdfi_huff
     if (dist > s->out_len) {
       return bdfi_inf_fail(s, "corrupt deflate stream");
     }
+    if (bdfi_inf_reserve(s, len) < 0) {
+      return -1;
+    }
     for (size_t i = 0; i < len; i++) {
-      if (bdfi_inf_put(s, s->out[s->out_len - dist]) < 0) {
+      if (bdfi_inf_write(s, s->out[(s->out_len - dist) & s->out_mask]) < 0) {
         return -1;
       }
     }
@@ -254,11 +301,10 @@ static int bdfi_inf_stored_pulled(bdfi_inf *s) {
       if (take > run) {
         take = run;
       }
-      for (size_t i = 0; i < take; i++) {
-        if (bdfi_inf_put(s, s->in[s->in_pos++]) < 0) {
-          return -1;
-        }
+      if (bdfi_inf_bytes(s, s->in + s->in_pos, take) < 0) {
+        return -1;
       }
+      s->in_pos += take;
       run -= take;
     }
   }
@@ -283,12 +329,9 @@ static int bdfi_inf_stored(bdfi_inf *s) {
   if (s->in_len - s->in_pos < len) {
     return bdfi_inf_fail(s, "unexpected end of deflate stream");
   }
-  for (unsigned i = 0; i < len; i++) {
-    if (bdfi_inf_put(s, s->in[s->in_pos++]) < 0) {
-      return -1;
-    }
-  }
-  return 0;
+  int rc = bdfi_inf_bytes(s, s->in + s->in_pos, len);
+  s->in_pos += len;
+  return rc;
 }
 
 static int bdfi_inf_fixed(bdfi_inf *s) {
@@ -430,9 +473,9 @@ static void bdfi_inf_blocks(bdfi_inf *s) {
   } while (!last);
 }
 
-BDF_INTERNAL bdf_status bdfi_inflate_pull(bdfi_pull *in, size_t limit, uint8_t **out,
-                                          size_t *out_len) {
-  *out = NULL;
+BDF_INTERNAL bdf_status bdfi_inflate_sink(bdfi_pull *in, size_t limit,
+                                          int (*emit)(void *, const uint8_t *, size_t),
+                                          void *ctx, size_t *out_len) {
   *out_len = 0;
   bdfi_inf s;
   memset(&s, 0, sizeof s);
@@ -441,19 +484,27 @@ BDF_INTERNAL bdf_status bdfi_inflate_pull(bdfi_pull *in, size_t limit, uint8_t *
   s.in_len = in->n;
   s.in_pos = in->pos;
   s.limit = limit;
+  s.emit = emit;
+  s.emit_ctx = ctx;
+  s.out_cap = 256;
+  while (s.out_cap < limit && s.out_cap < 32768) {
+    s.out_cap *= 2;
+  }
+  s.out_mask = s.out_cap - 1;
+  s.out = malloc(s.out_cap);
+  if (!s.out) {
+    return BDF_ERR_NOMEM;
+  }
   bdfi_inf_blocks(&s);
   in->pos = s.in_pos; /* in is the stretch the stream ended in */
+  if (!s.err && (s.out_len & s.out_mask) &&
+      emit(ctx, s.out, s.out_len & s.out_mask) < 0) {
+    bdfi_inf_fail(&s, "invalid inflated data");
+  }
+  free(s.out);
   if (s.err) {
-    free(s.out);
     return strcmp(s.err, "out of memory") == 0 ? BDF_ERR_NOMEM : BDF_ERR_FORMAT;
   }
-  if (!s.out) {
-    s.out = malloc(1);
-    if (!s.out) {
-      return BDF_ERR_NOMEM;
-    }
-  }
-  *out = s.out;
   *out_len = s.out_len;
   return BDF_OK;
 }
@@ -472,6 +523,7 @@ bdf_status bdf_inflate(const uint8_t *data, size_t len, size_t limit, uint8_t **
   s.in = data;
   s.in_len = len;
   s.limit = limit;
+  s.out_mask = SIZE_MAX;
   bdfi_inf_blocks(&s);
   if (s.err) {
     free(s.out);

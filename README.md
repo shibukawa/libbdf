@@ -37,7 +37,9 @@ ctest --test-dir build --output-on-failure
 cmake --install build --prefix /usr/local
 ```
 
-CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). The rasterizer needs the math library (`-lm`) where that is one of its own, and that its sources are not compiled with fused multiply-adds: it turns them off itself with the pragma of each compiler, and CMake adds `-ffp-contract=off`; do not build it with `-ffast-math`. Options:
+CMake 3.21 or later and a C11 compiler (gcc, clang, MSVC). Windows targets must be 64-bit; for Visual Studio, use `cmake -B build -A x64`. 32-bit Windows is not supported. The 32-bit Linux CI job remains for embedded use.
+
+The rasterizer needs the math library (`-lm`) where that is one of its own, and that its sources are not compiled with fused multiply-adds: it turns them off itself with the pragma of each compiler, and CMake adds `-ffp-contract=off`; do not build it with `-ffast-math`. For pixel-exact reference comparisons on 32-bit x86 with GCC, use `-msse2 -mfpmath=sse`; x87's extended intermediate precision changes some pixels. Options:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -73,6 +75,22 @@ Beside CMake and pkg-config the repository has what other build systems and lang
 - The conformance suite: `bdf conformance -testdata testdata <dir>` in a checkout of bdf (or the `bdf-conformance` artifact of its CI and releases) writes it; `cmake -DBDF_CONFORMANCE_DIR=<dir>` adds it to `ctest`, or run `./build/tests/test_conformance <dir>`.
 - Fuzzing is run on demand, not in CI (the sanitizer job replays the tests instead). libFuzzer: `cmake -B build -DBDF_BUILD_FUZZ=ON -DBDF_SANITIZE=address,undefined && cmake --build build && ./build/fuzz/doc_fuzz fuzz/corpus/doc -max_total_time=600` (targets: `object`, `inflate`, `manifest`, `doc`, `woff2`, `text`, `unlock`, `search`, `render`, `image`, `font`, `svg`, which draws an SVG image, and `svgdoc`, which reads one; `LIBBDF_UNLOCK_SEEDS=$PWD/fuzz/corpus/unlock go test -C go -run TestWriteUnlockSeeds .` writes the seeds of the last, documents sealed for its key). Go: `cd go && go test -run '^$' -fuzz '^FuzzDoc$' -fuzztime 10m` (`FuzzObject`, `FuzzInflate`, `FuzzDoc`, `FuzzWOFF2`, `FuzzText`, `FuzzIndexPart`, `FuzzUnlock`, `FuzzSealed`, `FuzzNFKC`, `FuzzGCM`, `FuzzP256`, `FuzzPNG`, `FuzzJpeg`, `FuzzGif`, `FuzzBmp`, `FuzzWebp`, which decode an image with both decoders, and `FuzzFont`, which draws text in a font with both renderers; and in the package of the SVG reader, `go test -C go/svgdoc -run '^$' -fuzz '^FuzzSVG$'`, with `FuzzValues`, `FuzzFloat` and `FuzzStrings`). Add `-fuzzminimizetime 20x` for the targets that take whole documents: Go minimises every input that reaches new code for up to a minute, and a run that looks stalled (0 execs/sec) is doing that. `LIBBDF_FUZZ_SLOW_DIR=<dir>` makes `FuzzUnlock` and `FuzzSealed` write there any input that takes more than two seconds. The `fuzz` job of the CI workflow does all of it when dispatched by hand with a number of minutes. What a fuzzer finds is committed by hand to `fuzz/regress/<target>/` (replayed by `ctest`) or `go/testdata/fuzz/` (replayed by `go test`); `fuzz/corpus/` is the working corpus and stays local.
 
+## Resource limits and embedded builds
+
+Security and peak-memory measurements, known limits, and a small-device build
+example are in [the security and memory audit](docs/security-memory-audit.md).
+PNG decoding keeps a sliding deflate window and two rows; WOFF2 glyph scratch
+grows only as needed. Stored and decoded document parts default to a 256 MiB
+limit (`BDF_MAX_PART_SIZE`). Larger parts now return `BDF_ERR_TOO_LARGE`.
+
+CMake accepts positive integer overrides such as `-DBDF_MAX_PART_SIZE=4194304`,
+`-DBDF_MAX_RENDER_PIXELS=65536`, `-DBDF_MAX_DECODE_PIXELS=1048576`,
+`-DBDF_MAX_PICTURE_PIXELS=2097152`, `-DBDF_MAX_MANIFEST_SIZE=1048576`,
+`-DBDF_MAX_WOFF2_SIZE=4194304`, and `-DBDF_MAX_JSON_DEPTH=64`. Empty settings
+retain the defaults. Single-header users define these before the implementation
+include. Limits apply per resource; nested layers, decoded objects and fonts
+still need additional memory. Draw small regions for predictable output sizes.
+
 ## License
 
-MIT, the same as bdf. The vendored Brotli decoder under `third_party/brotli` is MIT as well (see its LICENSE and README). The trigonometric functions of the rasterizer (`src/rmath.c`) are ported from Go's math package, which is BSD-licensed and in turn translated from the Cephes Math Library: their notices are in `third_party/go-math/LICENSE`. The image decoders (`src/img_*.c`) are ported from Go's image packages and from golang.org/x/image, BSD-licensed as well: `third_party/go-image/LICENSE`. The tables of characters (`src/unicode_*.h`) are generated from the Unicode Character Database, under the Unicode License: `third_party/unicode/LICENSE`. The reader of SVG documents takes its number parsing, its string functions and its decoders of encodings from Go's standard library and golang.org/x/text (BSD: `third_party/go-text/LICENSE`). Its XML reader (`src/svg_xml.c`) is a port of `encoding/xmlro` of [tinygodriver](https://github.com/shibukawa/tinygodriver), a library of libbdf's author, who gives the port under the MIT license with the rest of libbdf.
+MIT, the same as bdf. The AES Boolean S-box and bit transpose are adapted from BearSSL under MIT (`third_party/bearssl/LICENSE`); they are compiled into the library and single header, with no extra runtime dependency. The vendored Brotli decoder under `third_party/brotli` is MIT as well (see its LICENSE and README). The trigonometric functions of the rasterizer (`src/rmath.c`) are ported from Go's math package, which is BSD-licensed and in turn translated from the Cephes Math Library: their notices are in `third_party/go-math/LICENSE`. The image decoders (`src/img_*.c`) are ported from Go's image packages and from golang.org/x/image, BSD-licensed as well: `third_party/go-image/LICENSE`. The tables of characters (`src/unicode_*.h`) are generated from the Unicode Character Database, under the Unicode License: `third_party/unicode/LICENSE`. The reader of SVG documents takes its number parsing, its string functions and its decoders of encodings from Go's standard library and golang.org/x/text (BSD: `third_party/go-text/LICENSE`). Its XML reader (`src/svg_xml.c`) is a port of `encoding/xmlro` of [tinygodriver](https://github.com/shibukawa/tinygodriver), a library of libbdf's author, who gives the port under the MIT license with the rest of libbdf.

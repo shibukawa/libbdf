@@ -53,4 +53,6 @@ xcodebuild -create-xcframework \
   -library "$out/ios/lib/libbdf.a" -headers "$headers" \
   -library "$out/ios-simulator/lib/libbdf.a" -headers "$headers" \
   -output "$out/bdf.xcframework" >>"$out/xcframework.log" 2>&1
+mkdir -p "$out/bdf.xcframework/licenses"
+cp "$root/third_party/bearssl/LICENSE" "$out/bdf.xcframework/licenses/LICENSE.bearssl"
 echo "$out/bdf.xcframework"

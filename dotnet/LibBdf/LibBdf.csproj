@@ -9,5 +9,6 @@
          puts it: runtimes/<rid>/native/. Without them the library is found
          as the system finds libraries (PATH, LD_LIBRARY_PATH, ...). -->
     <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" />
+    <None Include="../../third_party/bearssl/LICENSE" Pack="true" PackagePath="licenses/LICENSE.bearssl" />
   </ItemGroup>
 </Project>

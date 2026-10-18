@@ -106,10 +106,10 @@ static double bdfi_signed_area(const bdfi_pt *pts, size_t n) {
   return a;
 }
 
-/* Adds a polygon to the outline. */
-static void bdfi_stroker_put(bdfi_stroker *s, const bdfi_pt *pts, size_t n) {
+/* Reserve a polygon directly in the outline, without a scratch copy. */
+static bdfi_pt *bdfi_stroker_reserve(bdfi_stroker *s, size_t n) {
   if (s->oom || !bdfi_stroker_take(s, n)) {
-    return;
+    return NULL;
   }
   if (n > s->cap_pts - s->npts) {
     size_t cap = s->cap_pts ? s->cap_pts : 256;
@@ -119,7 +119,7 @@ static void bdfi_stroker_put(bdfi_stroker *s, const bdfi_pt *pts, size_t n) {
     bdfi_pt *grown = bdfi_realloc_array(s->pts, cap, sizeof *grown);
     if (!grown) {
       s->oom = 1;
-      return;
+      return NULL;
     }
     s->pts = grown;
     s->cap_pts = cap;
@@ -129,12 +129,28 @@ static void bdfi_stroker_put(bdfi_stroker *s, const bdfi_pt *pts, size_t n) {
     bdfi_poly *out = bdfi_realloc_array(s->out, cap, sizeof *out);
     if (!out) {
       s->oom = 1;
-      return;
+      return NULL;
     }
     s->out = out;
     s->cap_out = cap;
   }
-  bdfi_pt *dst = s->pts + s->npts;
+  return s->pts + s->npts;
+}
+
+static void bdfi_stroker_commit(bdfi_stroker *s, size_t n) {
+  bdfi_poly *pl = &s->out[s->nout++];
+  pl->off = s->npts;
+  pl->n = n;
+  pl->closed = 1;
+  s->npts += n;
+}
+
+/* Adds a polygon to the outline. */
+static void bdfi_stroker_put(bdfi_stroker *s, const bdfi_pt *pts, size_t n) {
+  bdfi_pt *dst = bdfi_stroker_reserve(s, n);
+  if (!dst) {
+    return;
+  }
   if (bdfi_signed_area(pts, n) < 0) {
     for (size_t i = 0; i < n; i++) {
       dst[i] = pts[n - 1 - i];
@@ -142,11 +158,7 @@ static void bdfi_stroker_put(bdfi_stroker *s, const bdfi_pt *pts, size_t n) {
   } else {
     memcpy(dst, pts, n * sizeof *dst);
   }
-  bdfi_poly *pl = &s->out[s->nout++];
-  pl->off = s->npts;
-  pl->n = n;
-  pl->closed = 1;
-  s->npts += n;
+  bdfi_stroker_commit(s, n);
 }
 
 /* Adds a polygon, unless it lies outside of what shows. */
@@ -194,14 +206,26 @@ static void bdfi_stroker_round(bdfi_stroker *s, bdfi_pt c) {
     n = bdfi_isnan(count) ? INT64_MIN : (int64_t)count;
   }
   n = n < 8 ? 8 : n > 256 ? 256 : n;
-  bdfi_pt pts[256];
+  bdfi_pt *pts = bdfi_stroker_reserve(s, (size_t)n);
+  if (!pts) {
+    return;
+  }
   for (int64_t i = 0; i < n; i++) {
     double sn, co;
     bdfi_sincos(BDFI_2PI * (double)i / (double)n, &sn, &co);
     pts[i].x = c.x + r * co;
     pts[i].y = c.y + r * sn;
   }
-  bdfi_stroker_put(s, pts, (size_t)n);
+  /* Preserve the same winding test, including its rounding for very
+   * large coordinates, while avoiding a 4 KiB array on the stack. */
+  if (bdfi_signed_area(pts, (size_t)n) < 0) {
+    for (int64_t i = 0; i < n / 2; i++) {
+      bdfi_pt p = pts[i];
+      pts[i] = pts[n - 1 - i];
+      pts[n - 1 - i] = p;
+    }
+  }
+  bdfi_stroker_commit(s, (size_t)n);
 }
 
 /* A square of the width of the line: the dot of a square cap. */

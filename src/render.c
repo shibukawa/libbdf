@@ -158,6 +158,14 @@ bdfi_robj *bdfi_r_part_slot(struct bdf_renderer *r, const uint8_t hash[16]) {
       r->oom = 1;
       return NULL;
     }
+    /* Cached pictures point back to their slots for eviction. A document
+     * can gain segments between draws, moving this array. */
+    for (size_t k = 0; k < r->nparts; k++) {
+      if (parts[k].pic) {
+        parts[k].pic->owner = &parts[k].pic;
+        parts[k].pic->owner_flag = &parts[k].pic_state;
+      }
+    }
     memset(parts + r->nparts, 0, (n - r->nparts) * sizeof *parts);
     r->parts = parts;
     r->nparts = n;

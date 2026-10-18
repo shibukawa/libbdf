@@ -6,6 +6,10 @@ project(bdf
   HOMEPAGE_URL "https://github.com/shibukawa/libbdf"
   LANGUAGES C)
 
+if(WIN32 AND CMAKE_SIZEOF_VOID_P LESS 8)
+  message(FATAL_ERROR "32-bit Windows is not supported; select a 64-bit target (for MSVC, -A x64)")
+endif()
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -20,6 +24,23 @@ option(BDF_QT "Build bdf::qt, which draws documents with QPainter (C++)" OFF)
 option(BDF_SKIA "Build bdf::skia, which draws documents with Skia (C++; see BDF_SKIA_DIR)" OFF)
 set(BDF_SANITIZE "" CACHE STRING "Sanitizers to build everything with, e.g. address,undefined")
 set(BDF_CONFORMANCE_DIR "" CACHE PATH "A conformance suite written by `bdf conformance`, run by ctest")
+
+# Empty values retain the header defaults. Apply overrides to every copy
+# of the sources, including internal tests and the single-header build.
+set(BDF_RESOURCE_LIMITS
+  BDF_MAX_MANIFEST_SIZE BDF_MAX_PART_SIZE BDF_MAX_WOFF2_SIZE BDF_MAX_RENDER_PIXELS
+  BDF_MAX_DECODE_PIXELS BDF_MAX_PICTURE_PIXELS BDF_MAX_JSON_DEPTH BDF_ARENA_CHUNK_SIZE
+  BDF_MAX_KDF_ITERATIONS BDF_MAX_REUSED_INSTRUCTIONS BDF_MAX_REUSED_DRAWN
+  BDF_MAX_SHADOW_BLUR BDF_MAX_JPEG_SCANS BDF_MAX_SVG_RASTER_PIXELS BDF_MAX_SVG_ELEMENTS)
+foreach(limit IN LISTS BDF_RESOURCE_LIMITS)
+  set(${limit} "" CACHE STRING "Override ${limit} (positive decimal integer; empty uses the default)")
+  if(NOT "${${limit}}" STREQUAL "")
+    if(NOT "${${limit}}" MATCHES "^[1-9][0-9]*$")
+      message(FATAL_ERROR "${limit} must be a positive decimal integer")
+    endif()
+    add_compile_definitions(${limit}=${${limit}})
+  endif()
+endforeach()
 
 if(BDF_SANITIZE)
   add_compile_options(-fsanitize=${BDF_SANITIZE} -fno-omit-frame-pointer -g)
@@ -106,7 +127,14 @@ endif()
 target_compile_features(bdf PUBLIC c_std_11)
 # The rasterizer takes square roots and remainders: the math library, where
 # it is one of its own.
-find_library(BDF_LIBM m)
+include(CheckLibraryExists)
+# Probe through the compiler driver so -m32 and cross-toolchain flags
+# select the matching library rather than a host-architecture file.
+check_library_exists(m round "" BDF_HAS_LIBM)
+set(BDF_LIBM "")
+if(BDF_HAS_LIBM)
+  set(BDF_LIBM m)
+endif()
 set(BDF_PC_LIBS_PRIVATE "")
 if(BDF_LIBM)
   target_link_libraries(bdf PRIVATE ${BDF_LIBM})
@@ -165,17 +193,20 @@ if(BDF_BUILD_FUZZ)
   target_compile_options(bdf PRIVATE -fsanitize=fuzzer-no-link)
   # Objects that draw each other again and again are stopped by a limit that
   # takes seconds to reach; a fuzzer learns as much from a lower one.
-  target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_INSTRUCTIONS=65536)
   # A document may ask for ten million iterations of its key derivation:
   # seconds for each input.
-  target_compile_definitions(bdf PRIVATE BDF_MAX_KDF_ITERATIONS=2048)
   # So do objects drawn again and again by a renderer, and shadows blurred
   # over a thousand pixels.
-  target_compile_definitions(bdf PRIVATE BDF_MAX_REUSED_DRAWN=65536 BDF_MAX_SHADOW_BLUR=16)
   # And images of a hundred megapixels.
-  target_compile_definitions(bdf PRIVATE BDF_MAX_DECODE_PIXELS=1048576)
   # And SVG images drawn large, of hundreds of thousands of elements.
-  target_compile_definitions(bdf PRIVATE BDF_MAX_SVG_RASTER_PIXELS=65536 BDF_MAX_SVG_ELEMENTS=2000)
+  foreach(bound BDF_MAX_REUSED_INSTRUCTIONS=65536 BDF_MAX_KDF_ITERATIONS=2048
+      BDF_MAX_REUSED_DRAWN=65536 BDF_MAX_SHADOW_BLUR=16 BDF_MAX_DECODE_PIXELS=1048576
+      BDF_MAX_SVG_RASTER_PIXELS=65536 BDF_MAX_SVG_ELEMENTS=2000)
+    string(REGEX REPLACE "=.*" "" limit "${bound}")
+    if("${${limit}}" STREQUAL "")
+      target_compile_definitions(bdf PRIVATE ${bound})
+    endif()
+  endforeach()
   add_subdirectory(fuzz)
 endif()
 
@@ -187,6 +218,8 @@ endif()
 add_subdirectory(adapters)
 
 if(BDF_INSTALL)
+  install(FILES third_party/bearssl/LICENSE
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/bdf RENAME LICENSE.bearssl)
   install(TARGETS bdf ${BDF_ADAPTER_TARGETS} EXPORT bdfTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

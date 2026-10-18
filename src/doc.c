@@ -47,55 +47,52 @@ static int bdfi_mem_read_at(void *ctx, uint64_t off, uint8_t *buf, size_t len) {
 
 /* ---- Parts by hash ------------------------------------------------------ */
 
-static int bdfi_cmp_hash(const void *a, const void *b) { return memcmp(a, b, 16); }
+static int bdfi_order_less(const bdfi_manifest *m, size_t a, size_t b) {
+  int c = memcmp(m->parts[a].hash, m->parts[b].hash, 16);
+  return c < 0 || (c == 0 && a > b);
+}
 
-/* bdfi_order_of sorts the indices of a manifest's parts by name, the last
- * of equal names first, as the reference's map (the last entry counts):
- * NULL when out of memory (and for no parts, with *oom left alone). */
+static void bdfi_order_down(const bdfi_manifest *m, size_t *order, size_t at, size_t n) {
+  size_t value = order[at];
+  while (at < n / 2) {
+    size_t child = 2 * at + 1;
+    if (child + 1 < n && bdfi_order_less(m, order[child], order[child + 1])) {
+      child++;
+    }
+    if (!bdfi_order_less(m, value, order[child])) {
+      break;
+    }
+    order[at] = order[child];
+    at = child;
+  }
+  order[at] = value;
+}
+
+/* Sort only the indices, without copying every 16-byte name. Heapsort
+ * needs constant scratch and O(n log n) comparisons even for hostile
+ * input. Equal names are ordered by descending index: the last wins. */
 static size_t *bdfi_order_of(const bdfi_manifest *m, int *oom) {
   size_t n = m->nparts;
   if (n == 0) {
     return NULL;
   }
-  /* copies of (name, index) are sorted, so that the comparison needs no state */
-  typedef struct {
-    uint8_t hash[16];
-    size_t index;
-  } rec;
-  rec *recs = bdfi_malloc_array(n, sizeof *recs);
   size_t *order = bdfi_malloc_array(n, sizeof *order);
-  if (!recs || !order) {
-    free(recs);
-    free(order);
+  if (!order) {
     *oom = 1;
     return NULL;
   }
   for (size_t i = 0; i < n; i++) {
-    memcpy(recs[i].hash, m->parts[i].hash, 16);
-    recs[i].index = i;
+    order[i] = i;
   }
-  qsort(recs, n, sizeof *recs, bdfi_cmp_hash);
-  for (size_t i = 0; i < n;) {
-    size_t j = i + 1;
-    while (j < n && memcmp(recs[j].hash, recs[i].hash, 16) == 0) {
-      j++;
-    }
-    /* of a run of one name, the entry that comes last in the manifest first */
-    size_t best = i;
-    for (size_t a = i + 1; a < j; a++) {
-      if (recs[a].index > recs[best].index) {
-        best = a;
-      }
-    }
-    rec t = recs[i];
-    recs[i] = recs[best];
-    recs[best] = t;
-    i = j;
+  for (size_t i = n / 2; i > 0; i--) {
+    bdfi_order_down(m, order, i - 1, n);
   }
-  for (size_t i = 0; i < n; i++) {
-    order[i] = recs[i].index;
+  for (size_t end = n - 1; end > 0; end--) {
+    size_t tmp = order[end];
+    order[end] = order[0];
+    order[0] = tmp;
+    bdfi_order_down(m, order, 0, end);
   }
-  free(recs);
   return order;
 }
 
@@ -107,17 +104,13 @@ static const bdfi_part *bdfi_find_in(const bdfi_manifest *m, const size_t *order
     int c = memcmp(m->parts[order[mid]].hash, hash, 16);
     if (c < 0) {
       lo = mid + 1;
-    } else if (c > 0) {
-      hi = mid;
     } else {
-      /* the first of equal names is the last entry of the manifest */
-      while (mid > 0 && memcmp(m->parts[order[mid - 1]].hash, hash, 16) == 0) {
-        mid--;
-      }
-      return &m->parts[order[mid]];
+      hi = mid;
     }
   }
-  return NULL;
+  /* Lower bound also handles repeated names in logarithmic time. */
+  return lo < m->nparts && memcmp(m->parts[order[lo]].hash, hash, 16) == 0
+             ? &m->parts[order[lo]] : NULL;
 }
 
 /* bdfi_lookup finds a part in a document and then in its segments: the
@@ -324,6 +317,10 @@ static bdf_status bdfi_load_stored(const bdf_doc *d, const bdfi_part *e, uint8_t
     return bdfi_fail(err, "part out of range");
   }
   size_t len = (size_t)e->len;
+  if (len > BDF_MAX_PART_SIZE) {
+    bdfi_error_set(err, BDF_ERR_TOO_LARGE, 0, "stored part too large");
+    return BDF_ERR_TOO_LARGE;
+  }
   if (d->split) {
     char name[33];
     bdf_hash_format(e->hash, name);
@@ -378,24 +375,22 @@ static int bdfi_str_is(const bdfi_str *s, const char *lit) {
 
 /* bdfi_open_sealed opens what was sealed with the content key: the nonce,
  * the ciphertext, the tag (spec §3.5). The result is the caller's. */
-static bdf_status bdfi_open_sealed(const bdfi_gcm *g, const uint8_t *sealed, size_t len,
+static bdf_status bdfi_open_sealed(const bdfi_gcm *g, uint8_t *sealed, size_t len,
                                    const uint8_t *aad, size_t aad_len, uint8_t **out,
                                    size_t *out_len, bdf_error *err) {
   if (len < BDFI_NONCE_SIZE + BDFI_TAG_SIZE) {
     return bdfi_fail(err, "sealed part too short");
   }
   size_t n = len - BDFI_NONCE_SIZE - BDFI_TAG_SIZE;
-  uint8_t *plain = malloc(n ? n : 1);
-  if (!plain) {
-    bdfi_error_set(err, BDF_ERR_NOMEM, 0, "out of memory");
-    return BDF_ERR_NOMEM;
-  }
+  /* Authentication completes before GCM writes anything. The destination
+   * precedes the ciphertext, so the forward decryption can reuse this
+   * allocation, including for an empty plaintext. Ownership transfers
+   * only on success. */
   if (bdfi_gcm_open(g, sealed, aad, aad_len, sealed + BDFI_NONCE_SIZE, n,
-                    sealed + BDFI_NONCE_SIZE + n, plain) < 0) {
-    free(plain);
+                    sealed + BDFI_NONCE_SIZE + n, sealed) < 0) {
     return bdfi_fail(err, "sealed part fails authentication");
   }
-  *out = plain;
+  *out = sealed;
   *out_len = n;
   return BDF_OK;
 }
@@ -417,6 +412,11 @@ static bdf_status bdfi_decode_stored(uint8_t *stored, size_t stored_len, const b
   if (limit < 0) {
     free(stored);
     return bdfi_fail(err, "negative part size");
+  }
+  if ((uint64_t)limit > BDF_MAX_PART_SIZE) {
+    free(stored);
+    bdfi_error_set(err, BDF_ERR_TOO_LARGE, 0, "decoded part too large");
+    return BDF_ERR_TOO_LARGE;
   }
   /* more than the address space holds is bounded by the address space (a
    * 32-bit build) */
@@ -441,6 +441,11 @@ bdf_status bdf_doc_part(const bdf_doc *doc, const uint8_t hash[16], uint8_t **ou
   if (!e) {
     return bdfi_fail(err, "unknown part");
   }
+  if (bdfi_str_is(&e->enc, "deflate-raw") && e->size > 0 &&
+      (uint64_t)e->size > BDF_MAX_PART_SIZE) {
+    bdfi_error_set(err, BDF_ERR_TOO_LARGE, 0, "decoded part too large");
+    return BDF_ERR_TOO_LARGE;
+  }
   uint8_t *stored = NULL;
   size_t stored_len = 0;
   bdf_status st;
@@ -457,7 +462,9 @@ bdf_status bdf_doc_part(const bdf_doc *doc, const uint8_t hash[16], uint8_t **ou
       return st;
     }
     st = bdfi_open_sealed(d->gcm, raw, raw_len, e->hash, 16, &stored, &stored_len, err);
-    free(raw);
+    if (st != BDF_OK) {
+      free(raw);
+    }
   } else {
     st = bdfi_load_stored(d, e, &stored, &stored_len, err);
   }
@@ -502,6 +509,9 @@ static bdf_status bdfi_unlock_with(bdf_doc *d, const uint8_t key[BDFI_KEY_SIZE],
     goto fail;
   }
   st = bdfi_open_sealed(gcm, raw, raw_len, (const uint8_t *)"manifest", 8, &plain, &plain_len, err);
+  if (st == BDF_OK) {
+    raw = NULL; /* plain owns the allocation now */
+  }
   free(raw);
   if (st != BDF_OK) {
     goto fail;

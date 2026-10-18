@@ -216,10 +216,31 @@ static void test_glyf(void) {
   CHECK(bdfi_woff2_rebuild_glyf(bbox, 4, &glyf, &glyf_len, &loca, &loca_len) == BDF_ERR_FORMAT);
 }
 
+static void test_glyf_coordinate_overflow(void) {
+  size_t points = 32769;
+  uint8_t contours[] = {0, 1}, count[] = {253, 0x80, 1}, bbox[4] = {0};
+  uint8_t *flags = malloc(points), *triplets = malloc(4 * points + 1);
+  memset(triplets, 0xff, 4 * points);
+  triplets[4 * points] = 0;
+  const uint8_t *s[7] = {contours, count, flags, triplets, NULL, bbox, NULL};
+  const size_t lengths[7] = {2, 3, points, 4 * points + 1, 0, 4, 0};
+  for (int sign = 0; sign < 2; sign++) {
+    memset(flags, sign ? 127 : 124, points);
+    size_t n, ng, nl;
+    uint8_t *t = transformed(1, 0, s, lengths, NULL, &n), *glyf, *loca;
+    CHECK(bdfi_woff2_rebuild_glyf(t, n, &glyf, &ng, &loca, &nl) == BDF_ERR_FORMAT);
+    CHECK(glyf == NULL && loca == NULL && ng == 0 && nl == 0);
+    free(t);
+  }
+  free(flags);
+  free(triplets);
+}
+
 int main(void) {
   test_base128();
   test_hmtx();
   test_glyf();
+  test_glyf_coordinate_overflow();
   if (failures) {
     fprintf(stderr, "%d checks failed\n", failures);
     return 1;
