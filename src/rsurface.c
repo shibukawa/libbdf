@@ -456,6 +456,34 @@ int bdfi_surface_fill(bdfi_surface *s, const bdfi_mask *cov, const bdfi_shader *
       }
       continue;
     }
+    if (mode == BDF_BLEND_SOURCE_OVER) {
+      /* source-over through a clip with coverage: what bdfi_blend_pixel
+       * does for it, operation for operation */
+      for (int i = 0; i < n; i++) {
+        float c = crow ? crow[i] * alpha : alpha;
+        float k = krow[i];
+        if (k == 0 || c == 0) {
+          continue;
+        }
+        const float *b = buf + 4 * i;
+        float *p = d + 4 * i;
+        float s0 = b[0] * c, s1 = b[1] * c, s2 = b[2] * c, s3 = b[3] * c;
+        float ia = 1 - s3;
+        float o0 = s0 + p[0] * ia, o1 = s1 + p[1] * ia, o2 = s2 + p[2] * ia, o3 = s3 + p[3] * ia;
+        if (k == 1) {
+          p[0] = o0;
+          p[1] = o1;
+          p[2] = o2;
+          p[3] = o3;
+        } else {
+          p[0] = p[0] + k * (o0 - p[0]);
+          p[1] = p[1] + k * (o1 - p[1]);
+          p[2] = p[2] + k * (o2 - p[2]);
+          p[3] = p[3] + k * (o3 - p[3]);
+        }
+      }
+      continue;
+    }
     for (int i = 0; i < n; i++) {
       float c = crow ? crow[i] * alpha : alpha;
       float k = krow ? krow[i] : 1;
@@ -499,17 +527,16 @@ int bdfi_surface_fill_background(bdfi_surface *s, const bdfi_mask *cov, const bd
 
 void bdfi_surface_to_rgba(const bdfi_surface *s, uint8_t *out) {
   size_t n = 4 * (size_t)s->w * (size_t)s->h;
+  const float *pix = s->pix; /* in a register: out may be taken to alias s */
   for (size_t i = 0; i < n; i++) {
-    float v = s->pix[i];
+    float v = pix[i];
     /* rounded to the nearest: a float times 255 is exact as a double, and
      * so is the half added to what is not far below it. What is no number
-     * is nothing. */
-    if (!(v > 0)) {
-      out[i] = 0;
-    } else if (v >= 1) {
-      out[i] = 255;
-    } else {
-      out[i] = (uint8_t)((double)v * 255 + 0.5);
-    }
+     * is nothing, as is what is below zero, and what is above one is all:
+     * held to [0, 1] (a NaN is not above 0), the arithmetic says the same
+     * of them, and the loop has no branch for a compiler to wait on. */
+    v = v > 0 ? v : 0;
+    v = v < 1 ? v : 1;
+    out[i] = (uint8_t)((double)v * 255 + 0.5);
   }
 }

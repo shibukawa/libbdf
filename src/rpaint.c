@@ -14,28 +14,77 @@ typedef struct bdfi_gstop {
   double c[4]; /* not premultiplied */
 } bdfi_gstop;
 
-void bdfi_lut_build(bdfi_lut *lut, const bdf_stop *stops, size_t n) {
-  memset(lut, 0, sizeof *lut);
-  bdfi_gstop *ss = n ? bdfi_malloc_array(n, sizeof *ss) : NULL;
-  if (!ss) {
-    return; /* no stops, or no memory: transparent black */
-  }
-  for (size_t i = 0; i < n; i++) {
-    uint32_t c = stops[i].color;
-    bdfi_gstop s;
-    s.off = bdfi_fmin(1, bdfi_fmax(0, (double)stops[i].offset));
-    s.c[0] = (double)(c >> 24) / 255;
-    s.c[1] = (double)(c >> 16 & 0xff) / 255;
-    s.c[2] = (double)(c >> 8 & 0xff) / 255;
-    s.c[3] = (double)(c & 0xff) / 255;
-    /* addColorStop keeps stops with the same offset in the order they came:
-     * sorted by insertion, which keeps that order */
+/* bdfi_stops_insert sorts stops by insertion: the order the reference's
+ * stable sort gives, whatever the offsets (a NaN offset compares with
+ * nothing, and the algorithm then decides where it goes). */
+static void bdfi_stops_insert(bdfi_gstop *ss, size_t n) {
+  for (size_t i = 1; i < n; i++) {
+    bdfi_gstop s = ss[i];
     size_t k = i;
     while (k > 0 && s.off < ss[k - 1].off) {
       ss[k] = ss[k - 1];
       k--;
     }
     ss[k] = s;
+  }
+}
+
+/* bdfi_stops_merge sorts stops by merging, stable as well: with offsets
+ * that are numbers there is one stable order, the insertion sort's, found
+ * in time proportional to n log n rather than n². tmp holds n stops. */
+static void bdfi_stops_merge(bdfi_gstop *ss, bdfi_gstop *tmp, size_t n) {
+  for (size_t i = 0; i < n; i += 16) {
+    bdfi_stops_insert(ss + i, n - i < 16 ? n - i : 16);
+  }
+  bdfi_gstop *from = ss, *to = tmp;
+  for (size_t width = 16; width < n; width *= 2) {
+    for (size_t lo = 0; lo < n; lo += 2 * width) {
+      size_t mid = lo + width < n ? lo + width : n, hi = lo + 2 * width < n ? lo + 2 * width : n;
+      size_t i = lo, j = mid, k = lo;
+      while (i < mid && j < hi) {
+        to[k++] = from[j].off < from[i].off ? from[j++] : from[i++];
+      }
+      while (i < mid) {
+        to[k++] = from[i++];
+      }
+      while (j < hi) {
+        to[k++] = from[j++];
+      }
+    }
+    bdfi_gstop *t = from;
+    from = to;
+    to = t;
+  }
+  if (from != ss) {
+    memcpy(ss, from, n * sizeof *ss);
+  }
+}
+
+void bdfi_lut_build(bdfi_lut *lut, const bdf_stop *stops, size_t n) {
+  memset(lut, 0, sizeof *lut);
+  bdfi_gstop *ss = n ? bdfi_malloc_array(n, sizeof *ss) : NULL;
+  if (!ss) {
+    return; /* no stops, or no memory: transparent black */
+  }
+  int nan = 0;
+  for (size_t i = 0; i < n; i++) {
+    uint32_t c = stops[i].color;
+    bdfi_gstop *s = &ss[i];
+    s->off = bdfi_fmin(1, bdfi_fmax(0, (double)stops[i].offset));
+    s->c[0] = (double)(c >> 24) / 255;
+    s->c[1] = (double)(c >> 16 & 0xff) / 255;
+    s->c[2] = (double)(c >> 8 & 0xff) / 255;
+    s->c[3] = (double)(c & 0xff) / 255;
+    nan |= s->off != s->off;
+  }
+  /* addColorStop keeps stops with the same offset in the order they came:
+   * a stable sort, which keeps that order */
+  bdfi_gstop *tmp = n > 16 && !nan ? bdfi_malloc_array(n, sizeof *tmp) : NULL;
+  if (tmp) {
+    bdfi_stops_merge(ss, tmp, n);
+    free(tmp);
+  } else {
+    bdfi_stops_insert(ss, n);
   }
   /* k is the first stop from the second that t does not pass: it moves on
    * as t grows */
@@ -125,39 +174,51 @@ static void bdfi_gradient_shade(const bdfi_shader *sh, int x, int y, int n, floa
   const bdfi_gradient_shader *g = (const bdfi_gradient_shader *)sh;
   const float *c = g->coords;
   static const float none[4] = {0, 0, 0, 0};
-  for (int i = 0; i < n; i++) {
-    bdfi_pt u = bdfi_mat_pt(&g->inv, (double)(x + i) + 0.5, (double)y + 0.5);
-    const float *col = none;
-    switch (g->kind) {
-    case BDF_PAINT_LINEAR: {
-      double x0 = (double)c[0], y0 = (double)c[1], x1 = (double)c[2], y1 = (double)c[3];
-      double dx = x1 - x0, dy = y1 - y0;
-      double l = dx * dx + dy * dy;
+  const double py = (double)y + 0.5;
+  /* a loop for each kind: the same arithmetic for each pixel, with what
+   * the coordinates alone decide found once */
+  switch (g->kind) {
+  case BDF_PAINT_LINEAR: {
+    double x0 = (double)c[0], y0 = (double)c[1], x1 = (double)c[2], y1 = (double)c[3];
+    double dx = x1 - x0, dy = y1 - y0;
+    double l = dx * dx + dy * dy;
+    for (int i = 0; i < n; i++) {
+      bdfi_pt u = bdfi_mat_pt(&g->inv, (double)(x + i) + 0.5, py);
+      const float *col = none;
       if (l > 0) {
         col = bdfi_lut_at(g->lut, ((u.x - x0) * dx + (u.y - y0) * dy) / l);
       }
-      break;
+      memcpy(dst + 4 * i, col, 4 * sizeof *dst);
     }
-    case BDF_PAINT_RADIAL: {
+    return;
+  }
+  case BDF_PAINT_RADIAL:
+    for (int i = 0; i < n; i++) {
+      bdfi_pt u = bdfi_mat_pt(&g->inv, (double)(x + i) + 0.5, py);
+      const float *col = none;
       double t;
       if (bdfi_radial_t(u.x, u.y, c, &t)) {
         col = bdfi_lut_at(g->lut, t);
       }
-      break;
+      memcpy(dst + 4 * i, col, 4 * sizeof *dst);
     }
-    case BDF_PAINT_CONIC: {
+    return;
+  case BDF_PAINT_CONIC:
+    for (int i = 0; i < n; i++) {
+      bdfi_pt u = bdfi_mat_pt(&g->inv, (double)(x + i) + 0.5, py);
       double a = bdfi_atan2(u.y - (double)c[2], u.x - (double)c[1]) - (double)c[0];
       double t = bdfi_mod(a / BDFI_2PI, 1);
       if (t < 0) {
         t++;
       }
-      col = bdfi_lut_at(g->lut, t);
-      break;
+      memcpy(dst + 4 * i, bdfi_lut_at(g->lut, t), 4 * sizeof *dst);
     }
-    default:
-      break;
+    return;
+  default:
+    for (int i = 0; i < n; i++) {
+      memcpy(dst + 4 * i, none, 4 * sizeof *dst);
     }
-    memcpy(dst + 4 * i, col, 4 * sizeof *dst);
+    return;
   }
 }
 

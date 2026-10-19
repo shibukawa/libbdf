@@ -1050,7 +1050,20 @@ BDF_INTERNAL int bdfi_fonts_read(const bdf_fonts *db, size_t face, const uint8_t
   if (!fp) {
     return 0;
   }
+  /* as much memory as the file is long, when its length can be asked for
+   * (a font file is a file, not a pipe): read in one piece, and not twice
+   * over into memory that doubles */
   size_t cap = 1 << 16, n = 0;
+  if (fseek(fp, 0, SEEK_END) == 0) {
+    long size = ftell(fp);
+    if (size > 0 && (unsigned long)size < SIZE_MAX - 1) {
+      cap = (size_t)size + 1; /* a byte over: the end is told by a short read */
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+      fclose(fp);
+      return 0;
+    }
+  }
   uint8_t *buf = malloc(cap);
   int rc = buf ? 1 : -1;
   while (rc == 1) {

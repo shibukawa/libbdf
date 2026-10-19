@@ -353,6 +353,17 @@ static void bdfi_draw_shadow(bdfi_drawer *d, const bdfi_mask *cov, const bdfi_sh
     return;
   }
   int stride = w + 2 * pad;
+  /* the blurred alpha and the pass buffer of the blur: as much again as the
+   * canvases and clips open may take, or the shadow is left out */
+  bdfi_ctx *ctx = d->ctx;
+  int64_t held = 2 * 4 * (int64_t)stride * (int64_t)(h + 2 * pad);
+  if (!bdfi_hold(d, ctx, held)) {
+    bdfi_r_warn(d->r, "a shadow needs more memory than a drawing may use: it is not drawn");
+    if (bdfi_unbounded(st->blend)) {
+      bdfi_draw_fill(d, bdfi_mask_empty(), &colour.base, 1, st->blend, st->clip);
+    }
+    return;
+  }
   float *buf = bdfi_malloc_array(4 * (size_t)w, sizeof *buf);
   bdfi_mask sm;
   sm.r = where;
@@ -361,6 +372,8 @@ static void bdfi_draw_shadow(bdfi_drawer *d, const bdfi_mask *cov, const bdfi_sh
   if (!buf || !sm.a) {
     free(buf);
     free(sm.a);
+    ctx->held -= held;
+    d->live -= held;
     d->r->oom = 1;
     return;
   }
@@ -376,11 +389,15 @@ static void bdfi_draw_shadow(bdfi_drawer *d, const bdfi_mask *cov, const bdfi_sh
   free(buf);
   if (sigma > 0 && bdfi_blur(sm.a, stride, h + 2 * pad, sigma) < 0) {
     free(sm.a);
+    ctx->held -= held;
+    d->live -= held;
     d->r->oom = 1;
     return;
   }
   bdfi_draw_fill(d, &sm, &colour.base, 1, st->blend, st->clip);
   free(sm.a);
+  ctx->held -= held;
+  d->live -= held;
 }
 
 /* Composites a shader through a coverage with the alpha, the composite

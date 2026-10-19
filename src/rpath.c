@@ -60,20 +60,6 @@ int bdfi_irect_eq(bdfi_irect r, bdfi_irect s) {
   return r.x0 == s.x0 && r.y0 == s.y0 && r.x1 == s.x1 && r.y1 == s.y1;
 }
 
-double bdfi_clampf(double v) {
-  const double lim = 16777216.0; /* 1 << 24 */
-  if (bdfi_isnan(v)) {
-    return 0;
-  }
-  if (v < -lim) {
-    return -lim;
-  }
-  if (v > lim) {
-    return lim;
-  }
-  return v;
-}
-
 /* ---- Transforms ---------------------------------------------------------- */
 
 bdfi_mat bdfi_mat_identity(void) {
@@ -90,13 +76,6 @@ bdfi_mat bdfi_mat_mul2(bdfi_mat m, bdfi_mat n) {
   r.v[4] = m.v[0] * n.v[4] + m.v[2] * n.v[5] + m.v[4];
   r.v[5] = m.v[1] * n.v[4] + m.v[3] * n.v[5] + m.v[5];
   return r;
-}
-
-bdfi_pt bdfi_mat_pt(const bdfi_mat *m, double x, double y) {
-  bdfi_pt p;
-  p.x = m->v[0] * x + m->v[2] * y + m->v[4];
-  p.y = m->v[1] * x + m->v[3] * y + m->v[5];
-  return p;
 }
 
 bdfi_mat bdfi_mat_translate(bdfi_mat m, double x, double y) {
@@ -266,13 +245,6 @@ void bdfi_rpath_rect(bdfi_rpath *p, double x, double y, double w, double h) {
   bdfi_rpath_line_to(p, x, y + h);
   bdfi_rpath_close(p);
   bdfi_rpath_move_to(p, x, y);
-}
-
-int64_t bdfi_to_int(double v) {
-  if (!(v > -9223372036854775808.0 && v < 9223372036854775808.0)) {
-    return INT64_MIN;
-  }
-  return (int64_t)v;
 }
 
 typedef struct bdfi_arc {
@@ -589,6 +561,16 @@ void bdfi_scratch_reset(bdfi_scratch *sc) {
     sc->xs = NULL;
     sc->cap_xs = 0;
   }
+  if (sc->cap_edge_tmp > BDFI_SCRATCH_KEPT) {
+    free(sc->edge_tmp);
+    sc->edge_tmp = NULL;
+    sc->cap_edge_tmp = 0;
+  }
+  if (sc->cap_xs_tmp > BDFI_SCRATCH_KEPT) {
+    free(sc->xs_tmp);
+    sc->xs_tmp = NULL;
+    sc->cap_xs_tmp = 0;
+  }
   sc->npts = 0;
   sc->npolys = 0;
   sc->limited = 0;
@@ -599,6 +581,8 @@ void bdfi_scratch_free(bdfi_scratch *sc) {
   free(sc->edges);
   free(sc->active);
   free(sc->xs);
+  free(sc->edge_tmp);
+  free(sc->xs_tmp);
   free(sc->area);
   free(sc->cover);
   free(sc->pts);

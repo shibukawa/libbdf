@@ -37,10 +37,36 @@ static int bdfi_mp_nomem(bdfi_mp *p) {
 
 #define BDFI_WRONG_TYPE "manifest member of the wrong type"
 
-/* bdfi_mp_get returns the member, or NULL when absent or null. */
+/*
+ * bdfi_mp_get returns the member, or NULL when absent. Of members named
+ * twice the last counts, as encoding/json takes them, except a null one:
+ * where the reference's field is a pointer, a slice or a map (nullable) a
+ * null sets it to nothing, so the last member counts whatever it is;
+ * elsewhere encoding/json leaves the field as it was, so a null member is
+ * passed over and the last that is not null counts.
+ */
+static const bdfi_json_node *bdfi_mp_get_as(bdfi_mp *p, const bdfi_json_node *obj,
+                                            const char *key, int nullable) {
+  const bdfi_json_node *found = NULL;
+  if (nullable) {
+    found = bdfi_json_member(p->j, obj, key);
+  } else {
+    size_t klen = strlen(key);
+    for (const bdfi_json_node *n = bdfi_json_first(p->j, obj); n; n = bdfi_json_next(p->j, n)) {
+      size_t len;
+      const char *k = bdfi_json_text(p->j, n, 1, &len);
+      if (len == klen && memcmp(k, key, klen) == 0 && n->kind != BDFI_JSON_NULL) {
+        found = n;
+      }
+    }
+  }
+  return found && found->kind != BDFI_JSON_NULL ? found : NULL;
+}
+
+/* bdfi_mp_get is bdfi_mp_get_as for a field of a value: a string, a number,
+ * a name, a struct. */
 static const bdfi_json_node *bdfi_mp_get(bdfi_mp *p, const bdfi_json_node *obj, const char *key) {
-  const bdfi_json_node *n = bdfi_json_member(p->j, obj, key);
-  return n && n->kind != BDFI_JSON_NULL ? n : NULL;
+  return bdfi_mp_get_as(p, obj, key, 0);
 }
 
 static int bdfi_mp_strdup(bdfi_mp *p, const char *s, size_t n, bdfi_str *out) {
@@ -139,7 +165,7 @@ static int bdfi_mp_hash(bdfi_mp *p, const bdfi_json_node *obj, const char *key, 
 
 static int bdfi_mp_bytes(bdfi_mp *p, const bdfi_json_node *obj, const char *key, uint8_t **out,
                          size_t *len) {
-  const bdfi_json_node *n = bdfi_mp_get(p, obj, key);
+  const bdfi_json_node *n = bdfi_mp_get_as(p, obj, key, 1); /* a []byte */
   if (!n) {
     return 0;
   }
@@ -154,10 +180,11 @@ static int bdfi_mp_bytes(bdfi_mp *p, const bdfi_json_node *obj, const char *key,
   return 0;
 }
 
-/* bdfi_mp_array checks that a member is an array (or absent) and returns it. */
+/* bdfi_mp_array checks that a member is an array (or absent) and returns
+ * it: a slice of the reference, which a null member empties. */
 static int bdfi_mp_array(bdfi_mp *p, const bdfi_json_node *obj, const char *key,
                          const bdfi_json_node **out) {
-  const bdfi_json_node *n = bdfi_mp_get(p, obj, key);
+  const bdfi_json_node *n = bdfi_mp_get_as(p, obj, key, 1);
   *out = NULL;
   if (!n) {
     return 0;
@@ -169,9 +196,11 @@ static int bdfi_mp_array(bdfi_mp *p, const bdfi_json_node *obj, const char *key,
   return 0;
 }
 
-static int bdfi_mp_object(bdfi_mp *p, const bdfi_json_node *obj, const char *key,
+/* bdfi_mp_object is the same for an object: nullable where the reference
+ * holds it through a pointer or as a map, not where it is a struct. */
+static int bdfi_mp_object(bdfi_mp *p, const bdfi_json_node *obj, const char *key, int nullable,
                           const bdfi_json_node **out) {
-  const bdfi_json_node *n = bdfi_mp_get(p, obj, key);
+  const bdfi_json_node *n = bdfi_mp_get_as(p, obj, key, nullable);
   *out = NULL;
   if (!n) {
     return 0;
@@ -235,7 +264,7 @@ static int bdfi_mp_page(bdfi_mp *p, const bdfi_json_node *pg, bdfi_page *out) {
     return -1;
   }
   const bdfi_json_node *body;
-  if (bdfi_mp_object(p, pg, "body", &body) < 0) {
+  if (bdfi_mp_object(p, pg, "body", 1, &body) < 0) {
     return -1;
   }
   if (body) {
@@ -365,7 +394,7 @@ static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
     out->npages = pages->count;
   }
   const bdfi_json_node *cont;
-  if (bdfi_mp_object(p, v, "continuous", &cont) < 0) {
+  if (bdfi_mp_object(p, v, "continuous", 1, &cont) < 0) {
     return -1;
   }
   if (cont) {
@@ -380,7 +409,7 @@ static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
     return -1;
   }
   const bdfi_json_node *freeze;
-  if (bdfi_mp_object(p, v, "freeze", &freeze) < 0) {
+  if (bdfi_mp_object(p, v, "freeze", 1, &freeze) < 0) {
     return -1;
   }
   if (freeze) {
@@ -394,7 +423,7 @@ static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
     return -1;
   }
   const bdfi_json_node *tiles;
-  if (bdfi_mp_object(p, v, "tiles", &tiles) < 0) {
+  if (bdfi_mp_object(p, v, "tiles", 1, &tiles) < 0) {
     return -1;
   }
   if (tiles) {
@@ -427,7 +456,7 @@ static int bdfi_mp_view(bdfi_mp *p, const bdfi_json_node *v, bdfi_view *out) {
     return -1;
   }
   const bdfi_json_node *play;
-  if (bdfi_mp_object(p, v, "play", &play) < 0) {
+  if (bdfi_mp_object(p, v, "play", 1, &play) < 0) {
     return -1;
   }
   if (play) {
@@ -473,7 +502,7 @@ static int bdfi_mp_parts(bdfi_mp *p, const bdfi_json_node *root) {
 
 static int bdfi_mp_encryption(bdfi_mp *p, const bdfi_json_node *root) {
   const bdfi_json_node *enc;
-  if (bdfi_mp_object(p, root, "encryption", &enc) < 0 || !enc) {
+  if (bdfi_mp_object(p, root, "encryption", 1, &enc) < 0 || !enc) {
     return p->err ? -1 : 0;
   }
   bdfi_manifest *m = p->m;
@@ -511,7 +540,7 @@ static int bdfi_mp_encryption(bdfi_mp *p, const bdfi_json_node *root) {
     m->nkeys = keys->count;
   }
   const bdfi_json_node *sm;
-  if (bdfi_mp_object(p, enc, "manifest", &sm) < 0) {
+  if (bdfi_mp_object(p, enc, "manifest", 0, &sm) < 0) {
     return -1;
   }
   if (sm && (bdfi_mp_hash(p, sm, "part", m->sealed_manifest, NULL) < 0 ||
@@ -523,7 +552,7 @@ static int bdfi_mp_encryption(bdfi_mp *p, const bdfi_json_node *root) {
 
 static int bdfi_mp_meta(bdfi_mp *p, const bdfi_json_node *root) {
   const bdfi_json_node *meta;
-  if (bdfi_mp_object(p, root, "meta", &meta) < 0 || !meta) {
+  if (bdfi_mp_object(p, root, "meta", 0, &meta) < 0 || !meta) {
     return p->err ? -1 : 0;
   }
   bdfi_manifest *m = p->m;
@@ -532,7 +561,7 @@ static int bdfi_mp_meta(bdfi_mp *p, const bdfi_json_node *root) {
     return -1;
   }
   const bdfi_json_node *dc;
-  if (bdfi_mp_object(p, meta, "dc", &dc) < 0 || !dc) {
+  if (bdfi_mp_object(p, meta, "dc", 0, &dc) < 0 || !dc) {
     return p->err ? -1 : 0;
   }
   for (size_t t = 0; t < BDFI_DC_TERMS; t++) {
@@ -586,7 +615,7 @@ static int bdfi_mp_read(bdfi_mp *p) {
     return -1;
   }
   const bdfi_json_node *seg;
-  if (bdfi_mp_object(p, root, "segment", &seg) < 0) {
+  if (bdfi_mp_object(p, root, "segment", 1, &seg) < 0) {
     return -1;
   }
   if (seg) {

@@ -53,6 +53,7 @@ typedef struct bdfi_player {
   size_t nlayers, cap_layers;
   size_t layer_floor; /* the groups open where the object being run began: it ends none of them */
   bdfi_irect page; /* the pixels of what is played */
+  int path_over;   /* the path being made is too long: it is not handed over */
   bdfi_robj *obj;
   int depth;
   bdfi_hash_set seen;
@@ -97,7 +98,23 @@ static void bdfi_pstate_release(bdfi_pstate *st) {
 
 /* ---- Paths --------------------------------------------------------------- */
 
+/* The most verbs of a path handed to a canvas, and the coordinates that
+ * many may take: a run of glyphs or a text can ask for any number, and
+ * the rasterizer draws a path of a million points at most. */
+#define BDFI_PLAYER_MAX_VERBS ((size_t)1 << 21)
+#define BDFI_PLAYER_MAX_COORDS (6 * BDFI_PLAYER_MAX_VERBS + 2)
+
 static int bdfi_player_room(bdfi_player *p, size_t verbs, size_t coords) {
+  if (p->path_over) {
+    return 0;
+  }
+  if (verbs > BDFI_PLAYER_MAX_VERBS - p->nverbs || coords > BDFI_PLAYER_MAX_COORDS - p->ncoords) {
+    bdfi_r_warn(p->r, "a path is too complex to hand to a canvas: it is not drawn");
+    p->path_over = 1;
+    p->nverbs = 0;
+    p->ncoords = 0;
+    return 0;
+  }
   if (p->nverbs + verbs > p->cap_verbs) {
     size_t cap = 2 * (p->nverbs + verbs) + 16;
     uint8_t *v = bdfi_realloc_array(p->verbs, cap, 1);
@@ -124,6 +141,7 @@ static int bdfi_player_room(bdfi_player *p, size_t verbs, size_t coords) {
 static void bdfi_player_path_reset(bdfi_player *p) {
   p->nverbs = 0;
   p->ncoords = 0;
+  p->path_over = 0;
 }
 
 /* Adds a path to the one being handed over, under a matrix (NULL: as it is). */
@@ -665,6 +683,13 @@ static void bdfi_player_mask_begin(bdfi_player *p, uint8_t kind, uint32_t backdr
     return;
   }
   bdfi_irect dev = p->nlayers ? p->layers[p->nlayers - 1].dev : bdfi_irect_of(0, 0, 1, 1);
+  /* the mask is rasterized here, on as many pixels as the group has at
+   * the scale of the playing: no more than an image a renderer draws */
+  if ((int64_t)BDFI_DX(dev) * (int64_t)BDFI_DY(dev) > (int64_t)BDF_MAX_RENDER_PIXELS) {
+    bdfi_r_warn(p->r, "a soft mask covers more pixels than can be drawn: it is left out");
+    p->skipped++;
+    return;
+  }
   /* the user space of the mask on the pixels of the group */
   bdfi_mat to_dev = {{p->scale, 0, 0, p->scale, -(double)dev.x0, -(double)dev.y0}};
   bdfi_mat m = bdfi_mat_mul2(to_dev, p->st.m);
@@ -677,6 +702,13 @@ static void bdfi_player_mask_begin(bdfi_player *p, uint8_t kind, uint32_t backdr
     p->skipped++;
     return;
   }
+  /* and of this playing: the objects it draws again count against the
+   * same limit, and those seen so far are seen there */
+  p->mask->seen = p->seen;
+  memset(&p->seen, 0, sizeof p->seen);
+  p->mask->again = p->again;
+  p->mask->reused = p->reused;
+  p->mask->most = BDFI_MAX_REUSED_DRAWN;
   if (kind == BDF_MASK_LUMINOSITY) {
     bdfi_solid c = bdfi_premul(backdrop | 0xff);
     bdfi_surface *s = p->mask->top->target;
@@ -738,6 +770,10 @@ static void bdfi_player_mask_end(bdfi_player *p) {
   }
   free(pix);
   uint64_t drawing = p->r->drawing;
+  bdfi_hash_set_free(&p->seen);
+  p->seen = d->seen;
+  memset(&d->seen, 0, sizeof d->seen);
+  p->reused = d->reused;
   bdfi_drawer_free(d);
   p->r->drawing = drawing;
 }
@@ -999,7 +1035,8 @@ static void bdfi_player_instr(bdfi_player *p, const bdf_instr *in) {
     st->shadow = (uint32_t)U(0);
     double v = F(1) * s;
     if (!bdfi_isnan(v) && !bdfi_isinf(v)) {
-      st->shadow_blur = bdfi_fmax(0, v);
+      /* as the rasterizer bounds it, for a canvas that blurs as it does */
+      st->shadow_blur = bdfi_fmin(bdfi_fmax(0, v), BDFI_MAX_SHADOW_BLUR);
     }
     v = F(2) * s;
     if (!bdfi_isnan(v) && !bdfi_isinf(v)) {

@@ -55,7 +55,7 @@ The rasterizer needs the math library (`-lm`) where that is one of its own, and 
 | `BDF_QT` | OFF | build `bdf::qt` (C++; Qt 6, or Qt 5.15, QtGui) |
 | `BDF_SKIA` | OFF | build `bdf::skia` (C++). Skia has no package: `BDF_SKIA_DIR` is its root (`include/`, and its library under `out/`, or `BDF_SKIA_LIBRARY`), `BDF_SKIA_LINK` what that library is linked with |
 
-Some limits can be lowered when compiling the library (`-DBDF_MAX_KDF_ITERATIONS=...`, `-DBDF_MAX_REUSED_INSTRUCTIONS=...`, `-DBDF_MAX_DECODE_PIXELS=...`, `-DBDF_MAX_JPEG_SCANS=...`, `-DBDF_MAX_PICTURE_PIXELS=...`, `-DBDF_MAX_SVG_RASTER_PIXELS=...`, `-DBDF_MAX_SVG_ELEMENTS=...`): the iterations of the key derivation an encrypted document may ask for (ten million, the format's limit: seconds on a desktop, far more on a small processor), the instructions read again from objects drawn many times, the pixels an image is decoded with (a hundred million, at four bytes each), the scans a JPEG image is read to (a hundred: a decoder goes through the whole image once a scan), the pixels of the images a renderer keeps decoded, the pixels of a raster an SVG image is drawn into (sixteen million, and up to twice that; sixteen bytes each while it is drawn), and the elements drawn of one SVG image (two hundred thousand).
+The limits on what a document may ask of the library (the size of a part, the pixels of an image, the iterations of a key derivation, …) can be lowered when compiling it: see [Resource limits and embedded builds](#resource-limits-and-embedded-builds).
 
 Consumers find it with `find_package(bdf CONFIG)` and link `bdf::bdf`, with `pkg-config bdf`, or with `FetchContent` on this repository. An adapter that was built is `bdf::cairo`, `bdf::coregraphics`, `bdf::qt` or `bdf::skia` there (and `pkg-config bdf-cairo`); or take its two files into a build of your own, beside the library or the single header.
 
@@ -77,19 +77,56 @@ Beside CMake and pkg-config the repository has what other build systems and lang
 
 ## Resource limits and embedded builds
 
-Security and peak-memory measurements, known limits, and a small-device build
-example are in [the security and memory audit](docs/security-memory-audit.md).
-PNG decoding keeps a sliding deflate window and two rows; WOFF2 glyph scratch
-grows only as needed. Stored and decoded document parts default to a 256 MiB
-limit (`BDF_MAX_PART_SIZE`). Larger parts now return `BDF_ERR_TOO_LARGE`.
+The defaults of the limits suit a desktop. Each is a positive integer that
+CMake takes (`-DBDF_MAX_PART_SIZE=4194304`; an empty value keeps the
+default), or that a single-header build defines before the implementation
+include; the split sources need the same values in every translation unit.
+A limit bounds one resource, not the heap of the library: open layers,
+masks, shadows, fonts, decoded objects, the picture cache and the caller's
+input add to it, and a product that must stay within a budget of RAM or of
+time measures its own documents on its own hardware.
 
-CMake accepts positive integer overrides such as `-DBDF_MAX_PART_SIZE=4194304`,
-`-DBDF_MAX_RENDER_PIXELS=65536`, `-DBDF_MAX_DECODE_PIXELS=1048576`,
-`-DBDF_MAX_PICTURE_PIXELS=2097152`, `-DBDF_MAX_MANIFEST_SIZE=1048576`,
-`-DBDF_MAX_WOFF2_SIZE=4194304`, and `-DBDF_MAX_JSON_DEPTH=64`. Empty settings
-retain the defaults. Single-header users define these before the implementation
-include. Limits apply per resource; nested layers, decoded objects and fonts
-still need additional memory. Draw small regions for predictable output sizes.
+| Setting | Default | Bounds |
+|---|---:|---|
+| `BDF_MAX_MANIFEST_SIZE` | 256 MiB | the bytes of a manifest |
+| `BDF_MAX_PART_SIZE` | 256 MiB | the stored and the decoded bytes of one part (`BDF_ERR_TOO_LARGE` beyond) |
+| `BDF_MAX_WOFF2_SIZE` | 256 MiB | the decompressed tables and the rebuilt font of a WOFF2 file (`BDF_ERR_FORMAT` beyond) |
+| `BDF_MAX_RENDER_PIXELS` | 64 Mi | the pixels of an image a renderer draws (16 bytes a pixel while it is drawn) |
+| `BDF_MAX_DECODE_PIXELS` | 100 Mi | the pixels an image part is decoded with (4 bytes a pixel) |
+| `BDF_MAX_PICTURE_PIXELS` | 256 Mi | the pixels of the decoded images a renderer keeps |
+| `BDF_MAX_SVG_RASTER_PIXELS` | 16 Mi | the pixels an SVG image is drawn into (up to twice that after rounding; 16 bytes a pixel) |
+| `BDF_MAX_SVG_ELEMENTS` | 200,000 | the elements drawn of one SVG image, and eight times as many looked at |
+| `BDF_MAX_FACE_SEGMENTS` | 2^19 | the segments of glyph outlines a font keeps (56 bytes each; beyond, those kept are let go of) |
+| `BDF_MAX_JSON_DEPTH` | 1024 | the nesting of the manifest's JSON, and the recursion that reads it |
+| `BDF_ARENA_CHUNK_SIZE` | 4096 | the bytes an arena allocates at a time |
+| `BDF_MAX_KDF_ITERATIONS` | 10,000,000 | the iterations of a password's key derivation (the format's limit; seconds on a desktop) |
+| `BDF_MAX_REUSED_INSTRUCTIONS`, `BDF_MAX_REUSED_DRAWN` | 2^27, 2^24 | the instructions read again, and drawn again, from objects used many times |
+| `BDF_MAX_SHADOW_BLUR`, `BDF_MAX_JPEG_SCANS` | 1024, 100 | the blur of a shadow in pixels; the scans a JPEG image is read to (each scan goes through the whole image) |
+
+PNG decoding keeps a sliding deflate window and two rows, WOFF2 glyph
+scratch grows only as needed, and encrypted parts are decrypted in place, so
+a part costs about its own size while it is read. A page is drawn on a
+float canvas of 16 bytes a pixel and converted at the end: 256 × 256 pixels
+take about 1 MiB and the 256 KiB of the result; `bdf_render_region` draws
+only the rectangle asked for. A build for a small device starts from
+something like
+
+```sh
+cmake -S . -B build-small -DCMAKE_BUILD_TYPE=MinSizeRel \
+  -DBDF_BUILD_TESTS=OFF -DBDF_WITH_BROTLI=OFF \
+  -DBDF_MAX_MANIFEST_SIZE=1048576 -DBDF_MAX_PART_SIZE=4194304 \
+  -DBDF_MAX_WOFF2_SIZE=4194304 -DBDF_MAX_RENDER_PIXELS=65536 \
+  -DBDF_MAX_DECODE_PIXELS=1048576 -DBDF_MAX_PICTURE_PIXELS=2097152 \
+  -DBDF_MAX_SVG_RASTER_PIXELS=65536 -DBDF_MAX_FACE_SEGMENTS=65536 \
+  -DBDF_MAX_JSON_DEPTH=64 -DBDF_MAX_KDF_ITERATIONS=1000000
+```
+
+and lowers them further to the RAM there is and the documents it accepts.
+Lowering `BDF_MAX_JSON_DEPTH` or `BDF_MAX_KDF_ITERATIONS` refuses the
+documents that need more; nothing is computed with less. The cryptography
+avoids tables indexed by secrets (a Boolean AES S-box, GHASH by masked
+shifts), which is about cache leakage, not about the timing of the machine
+code a compiler makes or about physical side channels.
 
 ## License
 

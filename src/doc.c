@@ -952,6 +952,9 @@ bdf_status bdf_doc_tile(const bdf_doc *d, size_t view, size_t i, bdf_tile *out) 
 int bdf_tile_key_parse(const char *key, size_t len, uint32_t *tx, uint32_t *ty) {
   uint64_t v[2] = {0, 0};
   size_t i = 0;
+  if ((!key && len > 0) || !tx || !ty) {
+    return 0;
+  }
   for (int k = 0; k < 2; k++) {
     size_t start = i;
     while (i < len && key[i] >= '0' && key[i] <= '9') {

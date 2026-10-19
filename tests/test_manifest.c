@@ -90,6 +90,35 @@ static void test_json(void) {
   /* the last of duplicate members counts; unknown members and null are nothing */
   CHECK(manifest_opens("{\"bdf\":2,\"bdf\":1,\"future\":{\"deep\":[[[[1]]]]},\"views\":null}", &err));
   CHECK(!manifest_opens("{\"bdf\":1,\"bdf\":2}", &err));
+  /* a null leaves a number, a string or a struct as it was (encoding/json
+   * ignores it there), and empties a slice, a pointer or a map */
+  CHECK(manifest_opens("{\"bdf\":1,\"bdf\":null}", &err));
+  CHECK(manifest_opens("{\"bdf\":null,\"bdf\":1}", &err));
+  CHECK(!manifest_opens("{\"bdf\":2,\"bdf\":null}", &err));
+  CHECK(manifest_opens("{\"bdf\":1,\"views\":[{\"id\":5}],\"views\":null}", &err));
+  CHECK(!manifest_opens("{\"bdf\":1,\"views\":null,\"views\":[{\"id\":5}]}", &err));
+  CHECK(manifest_opens("{\"bdf\":1,\"views\":[{\"id\":\"v\",\"kind\":\"fixed\","
+                       "\"continuous\":{\"gap\":1e30},\"continuous\":null}]}",
+                       &err));
+  CHECK(!manifest_opens("{\"bdf\":1,\"views\":[{\"id\":\"v\",\"kind\":\"fixed\","
+                        "\"pages\":[{\"w\":1e9,\"w\":null,\"h\":1,\"layers\":[]}]}]}",
+                        &err));
+  CHECK(manifest_opens("{\"bdf\":1,\"meta\":{\"source\":\"x\"},\"meta\":null}", &err));
+  {
+    /* a part keeps its length through a null that follows it */
+    wr w;
+    bdf_doc *doc = NULL;
+    CHECK(open_single("{\"bdf\":1,\"parts\":[{\"h\":\"00000000000000000000000000000000\","
+                      "\"t\":\"obj\",\"enc\":\"identity\",\"len\":5,\"len\":null,\"size\":5,"
+                      "\"off\":0}]}",
+                      "hello", 5, &doc, &err, &w) == BDF_OK);
+    if (doc) {
+      bdf_part_entry e;
+      CHECK(bdf_doc_part_entry(doc, 0, &e) == BDF_OK && e.len == 5);
+      bdf_doc_free(doc);
+    }
+    free(w.b);
+  }
   /* members of the wrong type */
   CHECK(!manifest_opens("{\"bdf\":1,\"views\":{}}", &err));
   CHECK(!manifest_opens("{\"bdf\":1,\"views\":[5]}", &err));
@@ -180,6 +209,8 @@ static void test_fields(void) {
   CHECK(bdf_tile_key_parse(t.key, t.key_len, &tx, &ty) && tx == 12 && ty == 3);
   CHECK(!bdf_tile_key_parse("12", 2, &tx, &ty) && !bdf_tile_key_parse("1,2,3", 5, &tx, &ty) &&
         !bdf_tile_key_parse("a,1", 3, &tx, &ty) && !bdf_tile_key_parse("1,", 2, &tx, &ty));
+  CHECK(!bdf_tile_key_parse(NULL, 3, &tx, &ty) && !bdf_tile_key_parse("1,2", 3, NULL, &ty) &&
+        !bdf_tile_key_parse("1,2", 3, &tx, NULL) && !bdf_tile_key_parse(NULL, 0, &tx, &ty));
 
   bdf_part_entry pe;
   CHECK(bdf_doc_part_count(doc) == 2);

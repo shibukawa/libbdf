@@ -956,13 +956,18 @@ struct bdfi_face {
   size_t ncmap;
   bdfi_cff *cff;
   bdfi_glyph_page *pages[256];
+  size_t kept; /* the segments and sub-paths of the outlines in the pages */
   double upem, asc, dsc;
 };
 
-BDF_INTERNAL void bdfi_face_free(bdfi_face *f) {
-  if (!f) {
-    return;
-  }
+/* The most segments of outlines a face keeps (56 bytes each): a font can
+ * give every glyph the largest outline there is, and a document only has
+ * to draw each once. Beyond it the outlines kept so far are let go of. */
+#ifndef BDF_MAX_FACE_SEGMENTS
+#define BDF_MAX_FACE_SEGMENTS (1 << 19)
+#endif
+
+static void bdfi_face_drop_outlines(bdfi_face *f) {
   for (int i = 0; i < 256; i++) {
     if (f->pages[i]) {
       for (int k = 0; k < 256; k++) {
@@ -972,8 +977,17 @@ BDF_INTERNAL void bdfi_face_free(bdfi_face *f) {
         }
       }
       free(f->pages[i]);
+      f->pages[i] = NULL;
     }
   }
+  f->kept = 0;
+}
+
+BDF_INTERNAL void bdfi_face_free(bdfi_face *f) {
+  if (!f) {
+    return;
+  }
+  bdfi_face_drop_outlines(f);
   bdfi_cff_free(f->cff);
   free(f->cmap);
   free(f->owned);
@@ -1526,19 +1540,13 @@ static int bdfi_glyf_outline(const bdfi_face *f, uint32_t gid, bdfi_rpath *path,
 
 /*
  * fontFace.outline: the outline of a glyph in font units (y up), or NULL
- * for a glyph that has none or cannot be read. The face keeps it.
+ * for a glyph that has none or cannot be read. The face keeps it, until
+ * the outlines kept take more than BDF_MAX_FACE_SEGMENTS: a caller uses
+ * an outline before it asks for the next.
  */
 BDF_INTERNAL bdfi_rpath *bdfi_face_outline(bdfi_face *f, uint16_t gid, int *oom) {
   bdfi_glyph_page *page = f->pages[gid >> 8];
-  if (!page) {
-    page = calloc(1, sizeof *page);
-    if (!page) {
-      *oom = 1;
-      return NULL;
-    }
-    f->pages[gid >> 8] = page;
-  }
-  if (page->state[gid & 0xff]) {
+  if (page && page->state[gid & 0xff]) {
     return page->path[gid & 0xff];
   }
   bdfi_rpath *path = calloc(1, sizeof *path);
@@ -1565,6 +1573,26 @@ BDF_INTERNAL bdfi_rpath *bdfi_face_outline(bdfi_face *f, uint16_t gid, int *oom)
     free(path);
     path = NULL;
   }
+  size_t cost = path ? path->nsegs + path->nsubs : 0;
+  if (f->kept > 0 && (f->kept > (size_t)BDF_MAX_FACE_SEGMENTS ||
+                      cost > (size_t)BDF_MAX_FACE_SEGMENTS - f->kept)) {
+    /* (an outline larger than the budget is kept alone, until the next) */
+    bdfi_face_drop_outlines(f);
+    page = NULL;
+  }
+  if (!page) {
+    page = calloc(1, sizeof *page);
+    if (!page) {
+      if (path) {
+        bdfi_rpath_clear(path);
+        free(path);
+      }
+      *oom = 1;
+      return NULL;
+    }
+    f->pages[gid >> 8] = page;
+  }
+  f->kept += cost;
   page->state[gid & 0xff] = 1;
   page->path[gid & 0xff] = path;
   return path;
